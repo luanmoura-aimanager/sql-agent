@@ -1,5 +1,4 @@
 py311env/
-store.db
 __pycache__/
 *.pyc
 .env
