@@ -50,13 +50,22 @@ tools = [run_sql]
 agent = create_react_agent(model, tools, prompt=prompt)
 
 # ── LOOP DE PERGUNTAS ─────────────────────────────────────────────────────
+# chat_history acumula todas as mensagens da conversa
+chat_history = []
+
 while True:
     question = input("\nPergunta (ou 'sair' para terminar): ")
     if question.lower() == "sair":
         break
 
+    # passa o histórico completo junto com a nova pergunta
     result = agent.invoke({
-        "messages": [("human", question)]
+        "messages": chat_history + [("human", question)]
     })
 
-    print(f"\nResposta: {result['messages'][-1].content}")
+    answer = result["messages"][-1].content
+    print(f"\nResposta: {answer}")
+
+    # acumula no histórico para a próxima pergunta
+    chat_history.append(("human", question))
+    chat_history.append(("assistant", answer))
