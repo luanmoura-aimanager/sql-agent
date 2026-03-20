@@ -1,13 +1,15 @@
 import sqlite3
-import anthropic
 import json
 import streamlit as st
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
 
-client = anthropic.Anthropic()
+# ── MODELO ────────────────────────────────────────────────────────────────
+model = ChatAnthropic(model="claude-opus-4-6")
 
-# ── SCHEMA ────────────────────────────────────────────────────────────────
-SCHEMA = """
-Você é um assistente que responde perguntas sobre um banco de dados de uma loja.
+# ── PROMPT ────────────────────────────────────────────────────────────────
+SCHEMA = """Você é um assistente que responde perguntas sobre um banco de dados de uma loja.
 
 O banco possui as seguintes tabelas:
 
@@ -15,34 +17,20 @@ customers (id, name, city, email)
 products (id, name, category, price)
 orders (id, customer_id, product_id, quantity, order_date)
 
-Sempre responda em português.
-"""
+Sempre responda em português."""
 
 # ── TOOL ──────────────────────────────────────────────────────────────────
-tools = [
-    {
-        "name": "run_sql",
-        "description": "Executa uma query SQL no banco de dados e retorna os resultados",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "A query SQL a ser executada. Apenas SELECT é permitido."
-                }
-            },
-            "required": ["query"]
-        }
-    }
-]
+@tool
+def run_sql(query: str) -> str:
+    """Executa uma query SQL no banco de dados da loja e retorna os resultados.
+    Apenas queries SELECT são permitidas."""
 
-# ── EXECUÇÃO DO SQL ───────────────────────────────────────────────────────
-def run_sql(query):
     query_upper = query.strip().upper()
     forbidden = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE"]
     for word in forbidden:
         if word in query_upper:
-            return {"error": f"Query proibida: operação {word} não é permitida"}
+            return f"Query proibida: operação {word} não é permitida"
+
     try:
         conn = sqlite3.connect("store.db")
         cursor = conn.cursor()
@@ -50,66 +38,43 @@ def run_sql(query):
         results = cursor.fetchall()
         columns = [description[0] for description in cursor.description]
         conn.close()
-        return {"columns": columns, "rows": results}
+        return json.dumps({"columns": columns, "rows": results})
     except Exception as e:
-        return {"error": str(e)}
+        return f"Erro: {str(e)}"
 
-# ── REACT LOOP ────────────────────────────────────────────────────────────
-def ask_agent(messages):
-    while True:
-        response = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=1024,
-            system=SCHEMA,
-            tools=tools,
-            messages=messages
-        )
-
-        if response.stop_reason == "end_turn":
-            return response.content[0].text
-
-        if response.stop_reason == "tool_use":
-            messages.append({"role": "assistant", "content": response.content})
-
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = run_sql(block.input["query"])
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result)
-                    })
-
-            messages.append({"role": "user", "content": tool_results})
+# ── AGENTE ────────────────────────────────────────────────────────────────
+tools = [run_sql]
+agent = create_react_agent(model, tools, prompt=SCHEMA)
 
 # ── UI ────────────────────────────────────────────────────────────────────
 st.title("🗄️ SQL Agent")
 st.caption("Faça perguntas sobre o banco de dados em linguagem natural")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-if "history" not in st.session_state:
-    st.session_state.history = []
+if "display_history" not in st.session_state:
+    st.session_state.display_history = []
 
-for message in st.session_state.history:
+for message in st.session_state.display_history:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
 question = st.chat_input("Faça uma pergunta sobre os dados...")
 
 if question:
-    st.session_state.history.append({"role": "user", "content": question})
+    st.session_state.display_history.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.write(question)
 
-    st.session_state.messages.append({"role": "user", "content": question})
-
     with st.chat_message("assistant"):
         with st.spinner("Consultando o banco..."):
-            answer = ask_agent(st.session_state.messages)
+            result = agent.invoke({
+                "messages": st.session_state.chat_history + [("human", question)]
+            })
+            answer = result["messages"][-1].content
         st.write(answer)
 
-    st.session_state.history.append({"role": "assistant", "content": answer})
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    st.session_state.display_history.append({"role": "assistant", "content": answer})
+    st.session_state.chat_history.append(("human", question))
+    st.session_state.chat_history.append(("assistant", answer))
