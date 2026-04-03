@@ -85,7 +85,14 @@ def router(state: State) -> State:
     last_message = state["messages"][-1].content
     # Ask the model to answer with exactly YES or NO — cheap single-turn call.
     messages = [
-        SystemMessage(content="Does this question require querying a database with customer, product or order data? Answer with exactly one word: YES or NO."),
+        SystemMessage(content="""You are a routing assistant for a store database application.
+            The application has access to a SQLite database with customers, products, and orders tables.
+            Your job is to decide if the user's question should be answered by querying this database.
+
+            Answer YES if the question asks about: customers, products, orders, sales, cities, prices, quantities, or any store data.
+            Answer NO if the question is general knowledge, greetings, or unrelated to the store.
+
+            Answer with exactly one word: YES or NO."""),
         HumanMessage(content=last_message)
     ]
     result = model.invoke(messages)
