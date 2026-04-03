@@ -4,24 +4,24 @@ from langgraph.prebuilt import create_react_agent
 import sqlite3
 import json
 
-# ── MODELO ────────────────────────────────────────────────────────────────
-# Antes: client = anthropic.Anthropic()
-# Agora: LangChain gerencia o cliente por você
+# ── MODEL ─────────────────────────────────────────────────────────────────
+# Before: client = anthropic.Anthropic()
+# Now: LangChain manages the client for you
 model = ChatAnthropic(model="claude-opus-4-6")
 
 # ── TOOL ──────────────────────────────────────────────────────────────────
-# Antes: você definia um dicionário grande com name, description, input_schema
-# Agora: um simples decorador @tool faz tudo isso automaticamente
+# Before: you defined a large dict with name, description, input_schema
+# Now: a simple @tool decorator handles all of that automatically
 @tool
 def run_sql(query: str) -> str:
-    """Executa uma query SQL no banco de dados da loja e retorna os resultados.
-    Apenas queries SELECT são permitidas."""
+    """Executes a SQL query against the store database and returns the results.
+    Only SELECT queries are allowed."""
 
     query_upper = query.strip().upper()
     forbidden = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE"]
     for word in forbidden:
         if word in query_upper:
-            return f"Query proibida: operação {word} não é permitida"
+            return f"Forbidden query: operation {word} is not allowed"
 
     try:
         conn = sqlite3.connect("store.db")
@@ -32,40 +32,40 @@ def run_sql(query: str) -> str:
         conn.close()
         return json.dumps({"columns": columns, "rows": results})
     except Exception as e:
-        return f"Erro: {str(e)}"
+        return f"Error: {str(e)}"
 
 # ── PROMPT ────────────────────────────────────────────────────────────────
-prompt = """Você é um assistente que responde perguntas sobre um banco de dados de uma loja.
+prompt = """You are an assistant that answers questions about a store database.
 
-O banco possui as seguintes tabelas:
+The database has the following tables:
 
 customers (id, name, city, email)
 products (id, name, category, price)
 orders (id, customer_id, product_id, quantity, order_date)
 
-Sempre responda em português."""
+Always answer in English."""
 
-# ── AGENTE ────────────────────────────────────────────────────────────────
+# ── AGENT ─────────────────────────────────────────────────────────────────
 tools = [run_sql]
 agent = create_react_agent(model, tools, prompt=prompt)
 
-# ── LOOP DE PERGUNTAS ─────────────────────────────────────────────────────
-# chat_history acumula todas as mensagens da conversa
+# ── QUESTION LOOP ─────────────────────────────────────────────────────────
+# chat_history accumulates all messages in the conversation
 chat_history = []
 
 while True:
-    question = input("\nPergunta (ou 'sair' para terminar): ")
-    if question.lower() == "sair":
+    question = input("\nQuestion (or 'exit' to quit): ")
+    if question.lower() == "exit":
         break
 
-    # passa o histórico completo junto com a nova pergunta
+    # pass the full history along with the new question
     result = agent.invoke({
         "messages": chat_history + [("human", question)]
     })
 
     answer = result["messages"][-1].content
-    print(f"\nResposta: {answer}")
+    print(f"\nAnswer: {answer}")
 
-    # acumula no histórico para a próxima pergunta
+    # accumulate in history for the next question
     chat_history.append(("human", question))
     chat_history.append(("assistant", answer))

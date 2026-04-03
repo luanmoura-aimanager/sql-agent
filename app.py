@@ -19,23 +19,23 @@ model = ChatAnthropic(model="claude-haiku-4-5-20251001")
 # This string acts as the system prompt for the SQL sub-agent.
 # It tells the model what tables exist so it can write valid SQL without
 # seeing the raw schema every time (few-shot context compression).
-SCHEMA = """Você é um assistente que responde perguntas sobre um banco de dados de uma loja.
+SCHEMA = """You are an assistant that answers questions about a store database.
 
-O banco possui as seguintes tabelas:
+The database has the following tables:
 
 customers (id, name, city, email)
 products (id, name, category, price)
 orders (id, customer_id, product_id, quantity, order_date)
 
-Sempre responda em português."""
+Always answer in English."""
 
 # ── TOOL ──────────────────────────────────────────────────────────────────
 # @tool turns a plain Python function into a LangChain tool that the agent
 # can call by name. The docstring becomes the tool description the LLM sees.
 @tool
 def run_sql(query: str) -> str:
-    """Executa uma query SQL no banco de dados da loja e retorna os resultados.
-    Apenas queries SELECT são permitidas."""
+    """Executes a SQL query against the store database and returns the results.
+    Only SELECT queries are allowed."""
 
     # Safety gate: reject any query that contains a write/DDL keyword.
     # We uppercase the query first so the check is case-insensitive.
@@ -43,7 +43,7 @@ def run_sql(query: str) -> str:
     forbidden = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE"]
     for word in forbidden:
         if word in query_upper:
-            return f"Query proibida: operação {word} não é permitida"
+            return f"Forbidden query: operation {word} is not allowed"
 
     try:
         # Open a connection to the local SQLite file for each call.
@@ -58,7 +58,7 @@ def run_sql(query: str) -> str:
         # Return results as JSON so the LLM can parse and narrate them cleanly.
         return json.dumps({"columns": columns, "rows": results})
     except Exception as e:
-        return f"Erro: {str(e)}"
+        return f"Error: {str(e)}"
 
 # ── SQL AGENT (create_react_agent) ────────────────────────────────────────
 # create_react_agent builds a ReAct (Reason + Act) loop automatically.
@@ -106,7 +106,7 @@ def direct(state: State) -> State:
     """Answer questions that don't need database access — greetings, general
     knowledge, follow-up clarifications, etc."""
     messages = [
-        SystemMessage(content="You are a helpful assistant. Answer in Portuguese."),
+        SystemMessage(content="You are a helpful assistant. Answer in English."),
     ] + state["messages"]  # prepend system prompt to the full history
     result = model.invoke(messages)
     return {"messages": [AIMessage(content=result.content)]}
@@ -152,7 +152,7 @@ graph = builder.compile(checkpointer=memory)
 
 # ── UI ────────────────────────────────────────────────────────────────────
 st.title("🗄️ SQL Agent")
-st.caption("Faça perguntas sobre o banco de dados em linguagem natural")
+st.caption("Ask questions about the database in natural language")
 
 # st.session_state persists across Streamlit reruns (each user interaction
 # causes a full script rerun, so we store mutable data in session_state).
@@ -170,7 +170,7 @@ for message in st.session_state.chat_history:
         st.write(message["content"])
 
 # st.chat_input blocks until the user submits; returns None on page load.
-question = st.chat_input("Faça uma pergunta sobre os dados...")
+question = st.chat_input("Ask a question about the data...")
 
 if question:
     # Show the user's message immediately, before the agent responds.
@@ -178,7 +178,7 @@ if question:
         st.write(question)
 
     with st.chat_message("assistant"):
-        with st.spinner("Pensando..."):
+        with st.spinner("Thinking..."):
             # Pass the thread_id so LangGraph can load/save the checkpoint.
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             result = graph.invoke(
