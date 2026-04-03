@@ -1,14 +1,24 @@
 import sqlite3
 import json
 import streamlit as st
+from typing import TypedDict, Annotated
+from operator import add  # used by LangGraph to merge list fields across state updates
 from langchain_anthropic import ChatAnthropic
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langgraph.prebuilt import create_react_agent  # high-level helper that builds a ReAct loop
+from langgraph.graph import StateGraph, END         # primitives to define and terminate the graph
+from langgraph.checkpoint.memory import MemorySaver  # in-memory store for conversation checkpoints
 
 # ── MODELO ────────────────────────────────────────────────────────────────
-model = ChatAnthropic(model="claude-opus-4-6")
+# Haiku is the fastest / cheapest Claude model — good for routing decisions
+# and SQL queries where latency matters more than creative depth.
+model = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
-# ── PROMPT ────────────────────────────────────────────────────────────────
+# ── SCHEMA ────────────────────────────────────────────────────────────────
+# This string acts as the system prompt for the SQL sub-agent.
+# It tells the model what tables exist so it can write valid SQL without
+# seeing the raw schema every time (few-shot context compression).
 SCHEMA = """Você é um assistente que responde perguntas sobre um banco de dados de uma loja.
 
 O banco possui as seguintes tabelas:
@@ -20,11 +30,15 @@ orders (id, customer_id, product_id, quantity, order_date)
 Sempre responda em português."""
 
 # ── TOOL ──────────────────────────────────────────────────────────────────
+# @tool turns a plain Python function into a LangChain tool that the agent
+# can call by name. The docstring becomes the tool description the LLM sees.
 @tool
 def run_sql(query: str) -> str:
     """Executa uma query SQL no banco de dados da loja e retorna os resultados.
     Apenas queries SELECT são permitidas."""
 
+    # Safety gate: reject any query that contains a write/DDL keyword.
+    # We uppercase the query first so the check is case-insensitive.
     query_upper = query.strip().upper()
     forbidden = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE"]
     for word in forbidden:
@@ -32,49 +46,149 @@ def run_sql(query: str) -> str:
             return f"Query proibida: operação {word} não é permitida"
 
     try:
+        # Open a connection to the local SQLite file for each call.
+        # SQLite is file-based, so no server setup is needed.
         conn = sqlite3.connect("store.db")
         cursor = conn.cursor()
         cursor.execute(query)
-        results = cursor.fetchall()
+        results = cursor.fetchall()  # list of row tuples, e.g. [(1, "Ana", "SP"), ...]
+        # cursor.description gives column metadata; we extract just the names.
         columns = [description[0] for description in cursor.description]
         conn.close()
+        # Return results as JSON so the LLM can parse and narrate them cleanly.
         return json.dumps({"columns": columns, "rows": results})
     except Exception as e:
         return f"Erro: {str(e)}"
 
-# ── AGENTE ────────────────────────────────────────────────────────────────
-tools = [run_sql]
-agent = create_react_agent(model, tools, prompt=SCHEMA)
+# ── SQL AGENT (create_react_agent) ────────────────────────────────────────
+# create_react_agent builds a ReAct (Reason + Act) loop automatically.
+# The loop: think → call tool → observe result → think again → answer.
+# We pass `prompt=SCHEMA` so the SQL context is always in the system prompt.
+sql_react_agent = create_react_agent(model, [run_sql], prompt=SCHEMA)
+
+# ── STATE ─────────────────────────────────────────────────────────────────
+# LangGraph passes a single typed dict (State) between all graph nodes.
+# `Annotated[list, add]` tells LangGraph to *append* new messages rather
+# than replace the whole list — this is how conversation history accumulates.
+class State(TypedDict):
+    messages: Annotated[list, add]  # full conversation history, grows over turns
+    needs_sql: str                  # routing decision: "YES" or "NO"
+
+# ── NÓS ───────────────────────────────────────────────────────────────────
+# Each node is a plain function that receives the current State and returns
+# a partial State dict. LangGraph merges the partial dict into the current
+# state before passing it to the next node.
+
+def router(state: State) -> State:
+    """Classify whether the user question needs a SQL query or can be answered
+    directly. This keeps the expensive sql_react_agent idle for simple chitchat."""
+    last_message = state["messages"][-1].content
+    # Ask the model to answer with exactly YES or NO — cheap single-turn call.
+    messages = [
+        SystemMessage(content="Does this question require querying a database with customer, product or order data? Answer with exactly one word: YES or NO."),
+        HumanMessage(content=last_message)
+    ]
+    result = model.invoke(messages)
+    # Normalise to "YES" / "NO" regardless of extra whitespace or mixed case.
+    decision = result.content.strip().upper()
+    needs_sql = "YES" if "YES" in decision else "NO"
+    return {"needs_sql": needs_sql}
+
+def sql_agent(state: State) -> State:
+    """Invoke the ReAct SQL sub-agent with the full message history and return
+    its final answer as a new AIMessage appended to the state."""
+    result = sql_react_agent.invoke({"messages": state["messages"]})
+    # The last message in result["messages"] is the agent's final text reply.
+    answer = result["messages"][-1].content
+    return {"messages": [AIMessage(content=answer)]}
+
+def direct(state: State) -> State:
+    """Answer questions that don't need database access — greetings, general
+    knowledge, follow-up clarifications, etc."""
+    messages = [
+        SystemMessage(content="You are a helpful assistant. Answer in Portuguese."),
+    ] + state["messages"]  # prepend system prompt to the full history
+    result = model.invoke(messages)
+    return {"messages": [AIMessage(content=result.content)]}
+
+def route_decision(state: State) -> str:
+    """Edge function: tells LangGraph which branch to take after the router node.
+    Must return a key that matches one of the conditional_edges mapping below."""
+    return state["needs_sql"]  # "YES" → sql_agent, "NO" → direct
+
+# ── GRAFO ─────────────────────────────────────────────────────────────────
+# StateGraph is a directed graph where each node is a function and edges
+# define the execution order. Conditional edges allow dynamic branching.
+builder = StateGraph(State)
+
+# Register nodes by name — the name is also used in edge declarations.
+builder.add_node("router", router)
+builder.add_node("sql_agent", sql_agent)
+builder.add_node("direct", direct)
+
+# Every request enters the graph at the "router" node.
+builder.set_entry_point("router")
+
+# After "router" runs, call `route_decision` to pick the next node.
+builder.add_conditional_edges(
+    "router",
+    route_decision,
+    {
+        "YES": "sql_agent",  # question needs data → run SQL sub-agent
+        "NO": "direct",      # question is general → answer directly
+    }
+)
+
+# Both terminal nodes flow to END, which signals LangGraph to stop.
+builder.add_edge("sql_agent", END)
+builder.add_edge("direct", END)
+
+# MemorySaver stores the state after each graph run so that, when the same
+# thread_id is used again, the full conversation history is restored.
+memory = MemorySaver()
+
+# Compile the builder into an executable graph, wiring in the checkpointer.
+graph = builder.compile(checkpointer=memory)
 
 # ── UI ────────────────────────────────────────────────────────────────────
 st.title("🗄️ SQL Agent")
 st.caption("Faça perguntas sobre o banco de dados em linguagem natural")
 
+# st.session_state persists across Streamlit reruns (each user interaction
+# causes a full script rerun, so we store mutable data in session_state).
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+    st.session_state.chat_history = []  # list of {"role": ..., "content": ...} dicts
 
-if "display_history" not in st.session_state:
-    st.session_state.display_history = []
+if "thread_id" not in st.session_state:
+    # A fixed thread_id ties all messages to the same MemorySaver checkpoint,
+    # giving the agent a continuous memory across multiple questions.
+    st.session_state.thread_id = "streamlit-session"
 
-for message in st.session_state.display_history:
+# Replay all previous messages so the chat UI shows the full conversation.
+for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
+# st.chat_input blocks until the user submits; returns None on page load.
 question = st.chat_input("Faça uma pergunta sobre os dados...")
 
 if question:
-    st.session_state.display_history.append({"role": "user", "content": question})
+    # Show the user's message immediately, before the agent responds.
     with st.chat_message("user"):
         st.write(question)
 
     with st.chat_message("assistant"):
-        with st.spinner("Consultando o banco..."):
-            result = agent.invoke({
-                "messages": st.session_state.chat_history + [("human", question)]
-            })
+        with st.spinner("Pensando..."):
+            # Pass the thread_id so LangGraph can load/save the checkpoint.
+            config = {"configurable": {"thread_id": st.session_state.thread_id}}
+            result = graph.invoke(
+                {"messages": [HumanMessage(content=question)]},
+                config=config
+            )
+            # The final node always appends an AIMessage; grab its text content.
             answer = result["messages"][-1].content
         st.write(answer)
 
-    st.session_state.display_history.append({"role": "assistant", "content": answer})
-    st.session_state.chat_history.append(("human", question))
-    st.session_state.chat_history.append(("assistant", answer))
+    # Persist this turn to session_state so it appears on the next rerun.
+    st.session_state.chat_history.append({"role": "user", "content": question})
+    st.session_state.chat_history.append({"role": "assistant", "content": answer})

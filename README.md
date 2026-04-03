@@ -1,41 +1,136 @@
 # SQL Agent
 
-A Streamlit app that lets you query a SQLite database using plain Portuguese. Powered by Claude via the Anthropic API with a ReAct (tool use) loop.
+A Streamlit chat app that lets you query a SQLite database using plain Portuguese. You type a question, and a LangGraph-powered agent decides whether it needs to run SQL, executes the query safely, and returns a human-readable answer — all backed by Claude via the Anthropic API.
 
-## How it works
+---
 
-1. You type a question in natural language (e.g. "Quais clientes são de São Paulo?")
-2. Claude decides which SQL query to run against the database
-3. The query executes and results are returned to Claude
-4. Claude answers in Portuguese based on the data
+## Architecture overview
 
-Only `SELECT` queries are allowed — write operations are blocked.
+```
+User question
+      │
+      ▼
+┌─────────────┐    YES    ┌─────────────────────┐
+│   router    │──────────▶│   sql_agent (ReAct) │──┐
+│  (LLM call) │           │   ↳ run_sql tool    │  │
+└─────────────┘           └─────────────────────┘  │
+      │                                             │
+      │ NO               ┌──────────────────────┐  │
+      └─────────────────▶│   direct (LLM call)  │  │
+                         └──────────────────────┘  │
+                                    │               │
+                                    ▼               ▼
+                                   END ◀────────────┘
+```
+
+The graph has **three nodes** and one conditional branch:
+
+| Node | Purpose |
+|---|---|
+| `router` | Cheap single-turn LLM call that decides YES/NO: does this question need SQL? |
+| `sql_agent` | A full ReAct loop — the model thinks, calls `run_sql`, observes the result, and repeats until it can answer. |
+| `direct` | A plain LLM call for questions that don't need data (greetings, explanations, follow-ups). |
+
+---
+
+## Key concepts explained
+
+### LangGraph `StateGraph`
+
+LangGraph lets you define agentic workflows as a directed graph. Each **node** is a Python function that receives the shared `State` dict and returns a partial update. **Edges** wire nodes together; **conditional edges** let you branch based on runtime values.
+
+```python
+builder = StateGraph(State)
+builder.add_node("router", router)
+builder.add_conditional_edges("router", route_decision, {"YES": "sql_agent", "NO": "direct"})
+graph = builder.compile(checkpointer=memory)
+```
+
+### State and message accumulation
+
+The `State` TypedDict has a `messages` field annotated with `add`:
+
+```python
+class State(TypedDict):
+    messages: Annotated[list, add]  # new messages are appended, not replaced
+    needs_sql: str
+```
+
+This means every node can safely append messages without clobbering the history.
+
+### ReAct agent (`create_react_agent`)
+
+The SQL sub-agent uses the **ReAct** (Reason + Act) pattern:
+
+1. **Think** — the model decides what SQL to write.
+2. **Act** — it calls the `run_sql` tool.
+3. **Observe** — it reads the JSON result.
+4. **Repeat or answer** — if more data is needed it loops; otherwise it returns a natural-language answer.
+
+`create_react_agent` builds this loop automatically from a model and a list of tools.
+
+### `run_sql` tool safety
+
+Only `SELECT` queries are allowed. Before execution, the query is checked against a blocklist of destructive keywords (`DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `TRUNCATE`). Results are returned as JSON so the LLM can narrate them clearly.
+
+### MemorySaver (conversation memory)
+
+`MemorySaver` is LangGraph's in-memory checkpointer. Each `graph.invoke` call passes a `thread_id`; LangGraph saves the full state after each run and restores it on the next call with the same `thread_id`. This gives the agent a persistent memory across multiple questions in the same session.
+
+---
 
 ## Database schema
 
-A demo store database with three tables:
+A demo store database (`store.db`) with three tables:
 
-| Table | Columns |
-|---|---|
-| `customers` | id, name, city, email |
-| `products` | id, name, category, price |
-| `orders` | id, customer_id, product_id, quantity, order_date |
+| Table | Columns | Description |
+|---|---|---|
+| `customers` | id, name, city, email | People who place orders |
+| `products` | id, name, category, price | Items available in the store |
+| `orders` | id, customer_id, product_id, quantity, order_date | Purchase records linking customers to products |
 
-## Deploy on Streamlit Cloud
+Sample questions to try:
+- *"Quais clientes são de São Paulo?"*
+- *"Qual produto gerou mais receita?"*
+- *"Quantos pedidos foram feitos em março de 2024?"*
 
-1. Fork or push this repo to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io) and connect the repo
-3. Set the main file to `app.py`
-4. Add your Anthropic API key in **Settings → Secrets**:
+---
 
-```toml
-ANTHROPIC_API_KEY = "sk-ant-..."
+## Project structure
+
 ```
+sql-agent/
+├── app.py          # LangGraph graph + Streamlit UI
+├── create_db.py    # One-time script to create and seed store.db
+├── requirements.txt
+└── store.db        # SQLite database file (generated by create_db.py)
+```
+
+---
 
 ## Run locally
 
 ```bash
+# 1. Install dependencies
 pip install -r requirements.txt
+
+# 2. Create the database (only needed once)
+python create_db.py
+
+# 3. Set your Anthropic API key
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# 4. Launch the app
 streamlit run app.py
+```
+
+## Deploy on Streamlit Cloud
+
+1. Fork or push this repo to GitHub.
+2. Go to [share.streamlit.io](https://share.streamlit.io) and connect the repo.
+3. Set the main file to `app.py`.
+4. Add your Anthropic API key in **Settings → Secrets**:
+
+```toml
+ANTHROPIC_API_KEY = "sk-ant-..."
 ```
