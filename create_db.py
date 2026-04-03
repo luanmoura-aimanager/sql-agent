@@ -82,4 +82,4 @@ cursor.executemany("INSERT INTO orders VALUES (?, ?, ?, ?, ?)", [
 # `commit` flushes the transaction to disk — without this, changes are lost.
 conn.commit()
 conn.close()
-print("Banco criado com sucesso!")
+print("Database created successfully!")
