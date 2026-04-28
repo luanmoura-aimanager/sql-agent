@@ -1,4 +1,5 @@
 import os
+import sys
 import streamlit as st
 from typing import TypedDict, Annotated
 from operator import add  # used by LangGraph to merge list fields across state updates
@@ -37,14 +38,15 @@ def call_mcp_tool(tool_name: str, arguments: dict) -> str:
     """Chama uma tool no servidor MCP local e retorna o resultado como string."""
     
     async def _call():
-        # 1. Define como subir o servidor
+        env = os.environ.copy()
+        env["SQL_AGENT_DB_PATH"] = DB_PATH
+
         server_params = StdioServerParameters(
-            command="python",
+            command=sys.executable,
             args=["mcp/sqlite-mcp-server.py"],
-            env={"SQL_AGENT_DB_PATH": DB_PATH}
+            env=env
         )
         
-        # 2. Abre o cliente, sessão, chama a tool, fecha
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
