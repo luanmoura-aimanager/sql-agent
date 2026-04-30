@@ -116,7 +116,7 @@ A demo store database (`store.db`) with three tables:
 | `products` | id, name, category, price | Items available in the store |
 | `orders` | id, customer_id, product_id, quantity, order_date | Purchase records linking customers to products |
 
-Sample questions to try:
+The agent answers in the same language as the question. Try:
 - *"Quais clientes são de São Paulo?"*
 - *"Qual produto gerou mais receita?"*
 - *"Quantos pedidos foram feitos em março de 2024?"*
@@ -146,7 +146,7 @@ sql-agent/
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Create the database (only needed once)
+# 2. (Optional) Recreate the database — store.db is already committed
 python create_db.py
 
 # 3. Set your Anthropic API key
@@ -168,5 +168,7 @@ The MCP server is spawned automatically by `app.py` — no separate process to s
 ```toml
 ANTHROPIC_API_KEY = "sk-ant-..."
 ```
+
+`SQL_AGENT_DB_PATH` is optional — it defaults to `"store.db"` in the working directory, which is where Streamlit Cloud places the repo root. Set it explicitly only if you want to point at a different database file.
 
 The `mcp/` directory must be committed to the repo so the server script is available at runtime.
