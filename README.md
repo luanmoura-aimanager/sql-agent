@@ -1,6 +1,6 @@
 # SQL Agent
 
-A Streamlit chat app that lets you query a SQLite database using plain Portuguese. You type a question, and a LangGraph-powered agent decides whether it needs to run SQL, executes the query safely, and returns a human-readable answer — all backed by Claude via the Anthropic API.
+A Streamlit chat app that lets you query a SQLite database using plain Portuguese. You type a question, and a LangGraph-powered agent decides whether it needs to run SQL, executes the query safely via an MCP server, and returns a human-readable answer — all backed by Claude via the Anthropic API.
 
 ---
 
@@ -10,25 +10,33 @@ A Streamlit chat app that lets you query a SQLite database using plain Portugues
 User question
       │
       ▼
-┌─────────────┐    YES    ┌─────────────────────┐
-│   router    │──────────▶│   sql_agent (ReAct) │──┐
-│  (LLM call) │           │   ↳ run_sql tool    │  │
-└─────────────┘           └─────────────────────┘  │
-      │                                             │
-      │ NO               ┌──────────────────────┐  │
-      └─────────────────▶│   direct (LLM call)  │  │
-                         └──────────────────────┘  │
-                                    │               │
-                                    ▼               ▼
-                                   END ◀────────────┘
+┌─────────────┐    YES    ┌─────────────────────────────────────┐
+│   router    │──────────▶│         sql_agent (ReAct)           │──┐
+│  (LLM call) │           │  ↳ get_schema tool (MCP)            │  │
+└─────────────┘           │  ↳ run_query tool  (MCP)            │  │
+      │                   └─────────────────────────────────────┘  │
+      │                                  │                          │
+      │ NO               ┌───────────────┴──────────────────────┐  │
+      └─────────────────▶│           direct (LLM call)          │  │
+                         └──────────────────────────────────────┘  │
+                                         │                          │
+                                         ▼                          ▼
+                                        END ◀───────────────────────┘
+
+                                         ▲
+                        ┌────────────────┴──────────────────────────┐
+                        │        mcp/sqlite-mcp-server.py           │
+                        │   get_schema ── run_query (SELECT-only)   │
+                        │         transport: stdio                   │
+                        └───────────────────────────────────────────┘
 ```
 
-The graph has **three nodes** and one conditional branch:
+The graph has **three nodes** and one conditional branch. The SQL sub-agent no longer has direct database access — all DB operations go through the MCP server.
 
 | Node | Purpose |
 |---|---|
 | `router` | Cheap single-turn LLM call that decides YES/NO: does this question need SQL? |
-| `sql_agent` | A full ReAct loop — the model thinks, calls `run_sql`, observes the result, and repeats until it can answer. |
+| `sql_agent` | A full ReAct loop — the model thinks, calls `get_schema` and/or `run_query` via MCP, observes the result, and repeats until it can answer. |
 | `direct` | A plain LLM call for questions that don't need data (greetings, explanations, follow-ups). |
 
 ---
@@ -62,16 +70,35 @@ This means every node can safely append messages without clobbering the history.
 
 The SQL sub-agent uses the **ReAct** (Reason + Act) pattern:
 
-1. **Think** — the model decides what SQL to write.
-2. **Act** — it calls the `run_sql` tool.
-3. **Observe** — it reads the JSON result.
+1. **Think** — the model decides what to do next (check schema or write a query).
+2. **Act** — it calls `get_schema` or `run_query` (both backed by the MCP server).
+3. **Observe** — it reads the result.
 4. **Repeat or answer** — if more data is needed it loops; otherwise it returns a natural-language answer.
 
 `create_react_agent` builds this loop automatically from a model and a list of tools.
 
-### `run_sql` tool safety
+### MCP server (`mcp/sqlite-mcp-server.py`)
 
-Only `SELECT` queries are allowed. Before execution, the query is checked against a blocklist of destructive keywords (`DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `TRUNCATE`). Results are returned as JSON so the LLM can narrate them clearly.
+The database logic lives in a standalone **MCP (Model Context Protocol) server** instead of being hardcoded in `app.py`. The server exposes two tools over `stdio` transport:
+
+| Tool | Description |
+|---|---|
+| `get_schema` | Returns all table names and their columns — the agent calls this first to discover the database structure dynamically. |
+| `run_query` | Executes a `SELECT` query and returns up to 100 rows formatted as a readable string. |
+
+`app.py` spawns the server as a subprocess for each tool call via `call_mcp_tool()`. This architecture means any other agent (Claude Desktop, another LangGraph app) can consume the same server without any code duplication.
+
+> See [docs/adr/001-mcp-adoption.md](docs/adr/001-mcp-adoption.md) for the full decision record behind this design.
+
+### `run_query` safety guard
+
+Only `SELECT` queries are accepted. The guard lives in the MCP server — the correct trust boundary — rather than scattered across clients. Any query that does not start with `SELECT` is rejected before hitting the database. Results are truncated to 100 rows to keep LLM context manageable.
+
+> **Known limitation:** the guard is a string-prefix heuristic and is vulnerable to stacked queries (`SELECT ...; DROP ...`). In production, prefer a read-only SQLite connection or a proper SQL parser (e.g. `sqlglot`).
+
+### Dynamic schema discovery
+
+Previously the database schema was hardcoded in the system prompt. Now the agent discovers it at runtime by calling `get_schema` — which means the system prompt stays schema-agnostic and the agent adapts automatically if the database changes.
 
 ### MemorySaver (conversation memory)
 
@@ -100,10 +127,15 @@ Sample questions to try:
 
 ```
 sql-agent/
-├── app.py          # LangGraph graph + Streamlit UI
-├── create_db.py    # One-time script to create and seed store.db
+├── app.py                        # LangGraph graph + Streamlit UI
+├── mcp/
+│   └── sqlite-mcp-server.py      # Standalone MCP server (get_schema, run_query)
+├── docs/
+│   └── adr/
+│       └── 001-mcp-adoption.md   # Decision record: why MCP was adopted
+├── create_db.py                  # One-time script to create and seed store.db
 ├── requirements.txt
-└── store.db        # SQLite database file (generated by create_db.py)
+└── store.db                      # SQLite database file (generated by create_db.py)
 ```
 
 ---
@@ -124,6 +156,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 streamlit run app.py
 ```
 
+The MCP server is spawned automatically by `app.py` — no separate process to start.
+
 ## Deploy on Streamlit Cloud
 
 1. Fork or push this repo to GitHub.
@@ -134,3 +168,5 @@ streamlit run app.py
 ```toml
 ANTHROPIC_API_KEY = "sk-ant-..."
 ```
+
+The `mcp/` directory must be committed to the repo so the server script is available at runtime.
