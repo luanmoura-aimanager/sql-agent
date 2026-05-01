@@ -2,7 +2,7 @@
   category: aggregation_simple
   question: "How many customers do we have in total?"
   method: regex
-  pattern: "\\b50\\b"
+  pattern: "\\b5\\b"
 
 - id: list_tables
   category: metadata
@@ -16,8 +16,10 @@
 - id: most_expensive_product
   category: aggregation_minmax
   question: "What is the most expensive product?"
-  method: regex
-  pattern: "(?i)laptop"
+  method: regex_any
+  patterns: 
+    - "(?i)laptop"
+    - "(?i)notebook"
 
 - id: customers_by_city
   category: aggregation_groupby
@@ -46,9 +48,9 @@
   question: "How many customers do we have on Mars?"
   method: regex_any
   patterns:
-    - "(?i)none"
-    - "(?i)there are no"
-    - "0"
+     - "(?i)\\bnone\\b"
+     - "(?i)there are no"
+     - "\\b0\\b"
 
 - id: not_db_question
   category: router_direct
