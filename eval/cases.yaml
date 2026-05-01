@@ -46,8 +46,8 @@
   question: "How many customers do we have on Mars?"
   method: regex_any
   patterns:
-    - "(?i)nenhum"
-    - "(?i)não há"
+    - "(?i)none"
+    - "(?i)there are no"
     - "0"
 
 - id: not_db_question
