@@ -23,7 +23,7 @@ Você tem duas ferramentas disponíveis:
 
 Sempre que precisar dos dados, primeiro descubra o schema (se ainda não souber), depois escreva a query.
 
-Sempre responda em português."""
+Always answer in English."""
 
 
 def call_mcp_tool(tool_name: str, arguments: dict) -> str:
