@@ -133,9 +133,15 @@ The agent answers in English. Try:
 sql-agent/
 ├── app.py                        # Streamlit UI — thin wrapper over run_agent()
 ├── agent.py                      # LangGraph graph, nodes, tools, run_agent()
-├── eval.py                       # Evaluation runner — calls run_agent() directly
+├── eval.py                       # Regex + LLM-judge evaluation runner
+├── gen_outputs.py                # Generate agent answers for calibration set
+├── human_judge.py                # CLI to collect human pass/fail verdicts
 ├── eval_cases/
-│   └── cases.yaml                # Test cases (question + regex assertions)
+│   ├── cases.yaml                # Regex eval test cases
+│   ├── calibration_set.yaml      # 30-case human-judgment calibration set
+│   ├── calibration_outputs.json  # Agent answers for calibration cases
+│   ├── human_judgments.json      # Human verdicts (pass/fail + reason)
+│   └── notes.md                  # Baseline notes and failure analysis
 ├── mcp/
 │   └── sqlite-mcp-server.py      # Standalone MCP server (get_schema, run_query)
 ├── docs/
@@ -151,13 +157,51 @@ sql-agent/
 
 ## Eval harness
 
-`eval.py` runs a suite of regression tests against the live agent without starting Streamlit:
+Three complementary methods, in increasing fidelity order:
+
+### 1. Regex-based regression (`eval.py`)
+
+Fast, deterministic, no API cost. Run with:
 
 ```bash
 python eval.py
 ```
 
-Test cases live in `eval_cases/cases.yaml`. Each case has a question and a regex-based assertion (`regex`, `regex_all`, `regex_any`, or `regex_none`). Categories cover aggregation, metadata queries, router decisions, adversarial inputs, and missing-data edge cases.
+Test cases live in `eval_cases/cases.yaml`. Each case has a question and a regex assertion (`regex`, `regex_all`, `regex_any`, or `regex_none`). Categories cover aggregation, metadata queries, router decisions, adversarial inputs, and missing-data edge cases.
+
+### 2. LLM-as-judge
+
+`eval.py` also supports an LLM judge mode (see `--help`). The model grades each answer against a natural-language criterion instead of a regex.
+
+### 3. Human-judgment calibration
+
+The gold standard. A 30-case calibration set (`eval_cases/calibration_set.yaml`) covers the same categories as the regex suite but with richer, prose criteria.
+
+**Workflow:**
+
+```bash
+# Step 1 — generate agent answers for all 30 cases
+python gen_outputs.py          # writes eval_cases/calibration_outputs.json
+
+# Step 2 — record human verdicts interactively
+python human_judge.py          # writes eval_cases/human_judgments.json
+```
+
+`human_judge.py` is a terminal CLI: it shows question + criterion + agent answer for each case and asks for a `p`ass / `f`ail / `s`kip verdict with an optional reason. Progress is saved after every verdict so it can be interrupted and resumed.
+
+**Baseline (2026-05-04): 23 / 30 (76.7%)**
+
+| Category | Pass / Total |
+|---|---|
+| Aggregation (simple, min/max, group-by) | 12 / 12 |
+| Metadata | 2 / 3 |
+| Adversarial (destructive) | 0 / 4 |
+| Nonexistent data | 1 / 3 |
+| Ambiguous | 3 / 3 |
+| Not a DB question | 3 / 3 |
+| Typos / casual | 2 / 2 |
+
+Main failure modes: the router mis-classifies some questions as non-database requests (falsely claiming "no database access"), and adversarial refusals correctly refuse the action but inaccurately claim the agent has no database access at all.
 
 ---
 
