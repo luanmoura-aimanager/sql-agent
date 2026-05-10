@@ -15,13 +15,42 @@ model = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
 DB_PATH = os.environ.get("SQL_AGENT_DB_PATH", "store.db")
 
-SCHEMA = """Você é um assistente que responde perguntas sobre um banco de dados de uma loja.
+ROUTER_PROMPT = """You are a routing assistant for a store database application that has
+a SQLite database with `customers`, `products`, and `orders` tables.
 
-Você tem duas ferramentas disponíveis:
-- get_schema: descobre quais tabelas e colunas existem no banco
-- run_query: executa uma query SELECT no banco
+Your only job: decide if the user's message is in scope of this database
+system, regardless of whether the system can fulfill it. The downstream
+sql_agent has a SELECT-only guard and will refuse destructive operations,
+report empty results for nonexistent data, and inspect the schema for
+metadata questions. Don't try to anticipate any of that.
 
-Sempre que precisar dos dados, primeiro descubra o schema (se ainda não souber), depois escreva a query.
+Answer YES if the message:
+- Asks about data that could plausibly live in customers/products/orders
+  (counts, lists, aggregations, comparisons, even with absurd filters
+  like 'on Mars' or 'in 1850')
+- Mentions the schema (tables, columns, data types)
+- Issues a command on the database (DROP, DELETE, TRUNCATE, UPDATE,
+  INSERT, ALTER) — even if the command is destructive
+- References any field or column, including ones that may not exist
+  ('credit score', 'birthdate'), since checking the schema is what
+  the sql_agent does
+
+Answer NO if the message is unrelated to the database system:
+- General knowledge questions (what is SQL, how does X work)
+- Greetings, small talk
+- Topics not connected to the store's data model
+
+Answer with exactly one word: YES or NO."""
+
+
+SQL_AGENT_PROMPT = """You are an assistant that answers questions about a store database.
+
+You have two tools available:
+- get_schema: discovers which tables and columns exist in the database
+- run_query: executes a SELECT query on the database
+
+When you need data, first discover the schema (if you don't know it yet),
+then write the query.
 
 Always answer in English."""
 
@@ -57,26 +86,19 @@ def run_query(sql: str) -> str:
     Apenas SELECT é permitido."""
     return call_mcp_tool("run_query", {"sql": sql})
 
-
-sql_react_agent = create_react_agent(model, [get_schema, run_query], prompt=SCHEMA)
-
-
 class State(TypedDict):
     messages: Annotated[list, add]
     needs_sql: str
 
 
+sql_react_agent = create_react_agent(model, [get_schema, run_query], prompt=SQL_AGENT_PROMPT)
+
+
+# função router — usar ROUTER_PROMPT em vez do system inline
 def router(state: State) -> State:
     last_message = state["messages"][-1].content
     messages = [
-        SystemMessage(content="""You are a routing assistant for a store database application.
-            The application has access to a SQLite database with customers, products, and orders tables.
-            Your job is to decide if the user's question should be answered by querying this database.
-
-            Answer YES if the question asks about: customers, products, orders, sales, cities, prices, quantities, or any store data.
-            Answer NO if the question is general knowledge, greetings, or unrelated to the store.
-
-            Answer with exactly one word: YES or NO."""),
+        SystemMessage(content=ROUTER_PROMPT),
         HumanMessage(content=last_message),
     ]
     result = model.invoke(messages)
