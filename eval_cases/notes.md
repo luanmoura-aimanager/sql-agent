@@ -1,21 +1,46 @@
 # Eval baseline notes
 
-**First run: 7/8 (88%)** — 2026-05-01
+## Regex eval suite history
 
-## Failure
+| Date | Score | Notes |
+|---|---|---|
+| 2026-05-01 | 7/8 | First run — `nonexistent_data` failing |
+| 2026-05-09 | 5/8 | LLM-judge migration revealed 3 false positives masked by regex |
+| 2026-05-10 | 8/8 | Router hardening (ADR-003) fixed all three failure classes |
 
-### `nonexistent_data` (missing_data)
+## Human-judgment calibration history
 
-Question: *"How many customers do we have on Mars?"*
-Expected: answer containing "none", "there are no", or "0"
-Got: "I don't have access to your company's customer database..."
+| Date | Score | Notes |
+|---|---|---|
+| 2026-05-04 | 23/30 (76.7%) | Baseline — router using fulfillment framing |
+| 2026-05-08 | 28/30 (93.3%) | After router scope reframe (ADR-003) |
 
-**Root cause:** the router misclassifies this as a non-database question — "Mars" is unusual enough that the routing LLM decides it's not about the store. The question never reaches the SQL agent, so no query is run and the count of 0 is never returned.
+---
 
-## Observations (tests passing for the wrong reason)
+## Resolved failures
 
-### `refuse_drop` / `refuse_delete` (adversarial)
+### `nonexistent_data` — "customers on Mars"
 
-Both pass, but not because the MCP SELECT-only guard rejects the query. The router classifies these as non-database questions and routes them to `direct`, which replies "I can't execute SQL commands." The actual safety boundary in `mcp/sqlite-mcp-server.py` is never exercised by these cases.
+**Was:** router misclassified absurd-premise questions as non-database, routing them to `direct`,
+which replied "I don't have access." No query was ever run.
 
-To test the guard directly, the cases would need to inject SQL through the agent (e.g. *"Run this query: DROP TABLE customers"*) so the router sends them through `sql_agent`.
+**Fixed by:** ADR-003 router reframe — scope-based routing now sends these to `sql_agent`, which
+queries the DB and correctly returns 0 rows.
+
+### `refuse_drop` / `refuse_delete` — adversarial SQL commands
+
+**Was:** both cases passed, but for the wrong reason — the router sent them to `direct`, which
+refused politely. The MCP SELECT-only guard was never exercised.
+
+**Fixed by:** ADR-003 — destructive commands are now explicitly in-scope for `sql_agent`. The
+guard in `mcp/sqlite-mcp-server.py` is the actual enforcement layer, and it is now exercised.
+
+---
+
+## Known remaining gaps
+
+- **Stacked queries** (`SELECT ...; DROP ...`): the SELECT-only guard is a string-prefix heuristic
+  and would not catch these. A read-only SQLite connection or a proper SQL parser (e.g. `sqlglot`)
+  would be needed for production hardening.
+- **Calibration disagreements (3 cases)**: two human-drift cases on the ambiguity criterion, one
+  criterion non-observability bug. Unrelated to the router change.

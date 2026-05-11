@@ -76,15 +76,15 @@ def call_mcp_tool(tool_name: str, arguments: dict) -> str:
 
 @tool
 def get_schema() -> str:
-    """Descobre o schema do banco: lista de tabelas e suas colunas."""
+    """Returns the database schema: all table names and their columns."""
     return call_mcp_tool("get_schema", {})
 
 
 @tool
 def run_query(sql: str) -> str:
-    """Executa uma query SELECT no banco e retorna os resultados.
-    Apenas SELECT é permitido."""
+    """Executes a SELECT query and returns the results. Only SELECT is allowed."""
     return call_mcp_tool("run_query", {"sql": sql})
+
 
 class State(TypedDict):
     messages: Annotated[list, add]
@@ -94,7 +94,6 @@ class State(TypedDict):
 sql_react_agent = create_react_agent(model, [get_schema, run_query], prompt=SQL_AGENT_PROMPT)
 
 
-# função router — usar ROUTER_PROMPT em vez do system inline
 def router(state: State) -> State:
     last_message = state["messages"][-1].content
     messages = [
