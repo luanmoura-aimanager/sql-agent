@@ -5,7 +5,8 @@
 | Date | Score | Notes |
 |---|---|---|
 | 2026-05-01 | 7/8 | First run — `nonexistent_data` failing |
-| 2026-05-08 | 8/8 | Router hardening (ADR-003) fixed all three failure classes |
+| 2026-05-09 | 5/8 | LLM-judge migration revealed 3 false positives masked by regex |
+| 2026-05-10 | 8/8 | Router hardening (ADR-003) fixed all three failure classes |
 
 ## Human-judgment calibration history
 
