@@ -134,6 +134,7 @@ The agent answers in English. Try:
 ```
 sql-agent/
 ├── app.py                        # Streamlit UI — thin wrapper over run_agent()
+├── main.py                       # FastAPI server — POST /query HTTP interface
 ├── agent.py                      # LangGraph graph, nodes, tools, run_agent()
 ├── eval.py                       # Regex + LLM-judge evaluation runner
 ├── gen_outputs.py                # Generate agent answers for calibration set
@@ -240,6 +241,15 @@ A FastAPI interface is available alongside the Streamlit UI, exposing the same a
 // Request
 { "question": "Which product generated the most revenue?" }
 
+// With conversation history (optional)
+{
+  "question": "And the least?",
+  "history": [
+    { "role": "user",      "content": "Which product generated the most revenue?" },
+    { "role": "assistant", "content": "The top product is Widget A with $12,400." }
+  ]
+}
+
 // Response
 { "answer": "..." }
 ```
@@ -247,7 +257,6 @@ A FastAPI interface is available alongside the Streamlit UI, exposing the same a
 Start the server with:
 
 ```bash
-pip install fastapi uvicorn
 uvicorn main:app --reload
 ```
 
