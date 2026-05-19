@@ -221,11 +221,37 @@ python create_db.py
 # 3. Set your Anthropic API key
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# 4. Launch the app
+# 4. Launch the Streamlit app
 streamlit run app.py
+
+# 4b. Or run the FastAPI server
+uvicorn main:app --reload
 ```
 
-The MCP server is spawned automatically by `app.py` — no separate process to start.
+The MCP server is spawned automatically — no separate process to start.
+
+## REST API (`main.py`)
+
+A FastAPI interface is available alongside the Streamlit UI, exposing the same agent logic over HTTP.
+
+**Endpoint:** `POST /query`
+
+```json
+// Request
+{ "question": "Which product generated the most revenue?" }
+
+// Response
+{ "answer": "..." }
+```
+
+Start the server with:
+
+```bash
+pip install fastapi uvicorn
+uvicorn main:app --reload
+```
+
+Interactive docs are available at `http://localhost:8000/docs` once the server is running.
 
 ## Deploy on Streamlit Cloud
 
