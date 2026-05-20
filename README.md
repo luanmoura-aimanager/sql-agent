@@ -235,7 +235,13 @@ The MCP server is spawned automatically — no separate process to start.
 
 A FastAPI interface is available alongside the Streamlit UI, exposing the same agent logic over HTTP.
 
-**Endpoint:** `POST /query`
+### Endpoints
+
+#### `GET /health`
+
+Returns `{"status": "ok"}`. Use this to check that the server is up before sending queries.
+
+#### `POST /query`
 
 ```json
 // Request
@@ -252,6 +258,12 @@ A FastAPI interface is available alongside the Streamlit UI, exposing the same a
 
 // Response
 { "answer": "..." }
+```
+
+If the agent raises an exception, the server returns HTTP `500` with a JSON body:
+
+```json
+{ "detail": "Agent error: <error message>" }
 ```
 
 Start the server with:
