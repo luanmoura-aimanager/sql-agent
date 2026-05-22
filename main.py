@@ -1,9 +1,36 @@
+import os
+
 from agent import run_agent
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List
 
 app = FastAPI()
+
+# Lê o token esperado uma vez, no startup. Se a env var não estiver setada,
+# fail-fast: o servidor não sobe sem ela. É preferível quebrar no boot
+# do que aceitar requests sem auth por engano.
+EXPECTED_TOKEN = os.environ["API_TOKEN"]
+
+
+def verify_token(authorization: str = Header(...)) -> None:
+    """
+    Valida o header Authorization da request.
+
+    Espera o formato 'Bearer <token>'. Compara com EXPECTED_TOKEN
+    (lido do env no startup). Rejeita qualquer outra coisa com 401.
+
+    O Header(...) faz o FastAPI extrair o header HTTP 'Authorization'
+    automaticamente. Os '...' (Ellipsis) marcam o parâmetro como obrigatório
+    — sem o header, FastAPI já devolve 422 antes mesmo de entrar na função.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid auth scheme")
+
+    token = authorization.removeprefix("Bearer ")
+    if token != EXPECTED_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 
 class Message(BaseModel):
     role: str      # "user" ou "assistant"
@@ -21,7 +48,7 @@ async def health():
     return {"status": "ok"}
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(request: QueryRequest, _: None = Depends(verify_token)):
     try:
         history = [{"role": m.role, "content": m.content} for m in request.history]
         answer = run_agent(request.question, history)
