@@ -243,6 +243,8 @@ Returns `{"status": "ok"}`. Use this to check that the server is up before sendi
 
 #### `POST /query`
 
+Requires a Bearer token in the `Authorization` header. The server compares it against the `API_TOKEN` environment variable set at startup.
+
 ```json
 // Request
 { "question": "Which product generated the most revenue?" }
@@ -260,16 +262,33 @@ Returns `{"status": "ok"}`. Use this to check that the server is up before sendi
 { "answer": "..." }
 ```
 
-If the agent raises an exception, the server returns HTTP `500` with a JSON body:
+**Auth status codes:**
 
-```json
-{ "detail": "Agent error: <error message>" }
-```
+| Scenario | Status |
+|---|---|
+| Valid Bearer token | `200` |
+| Invalid token (`Bearer wrong`) | `401` — `{"detail": "Invalid token"}` |
+| Non-Bearer scheme | `401` — `{"detail": "Invalid auth scheme"}` |
+| Missing `Authorization` header | `422` (FastAPI schema validation) |
+| Agent raised an exception | `500` — `{"detail": "Agent error: <message>"}` |
 
-Start the server with:
+The 422 for missing header is a known wrinkle of using `Header(...)` — semantically it'd be cleaner as 401. Refactor candidate.
+
+Start the server with both env vars set:
 
 ```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export API_TOKEN="<your-shared-secret>"
 uvicorn main:app --reload
+```
+
+Example call:
+
+```bash
+curl -X POST localhost:8000/query \
+  -H "Authorization: Bearer <your-shared-secret>" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How many customers?"}'
 ```
 
 Interactive docs are available at `http://localhost:8000/docs` once the server is running.
