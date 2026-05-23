@@ -28,7 +28,7 @@ app = FastAPI()
 #   Reinicia → zera. Multi-worker → cada worker tem o seu (problema a
 #   resolver com Redis quando entrar deploy multi-instância).
 #
-#   SIDE-MISSION — reverse proxy footgun: em deploy real (nginx/ALB/
+#   TODO(deploy): reverse proxy footgun — em deploy real (nginx/ALB/
 #   Cloudflare), request.client.host é o IP do proxy, não do cliente.
 #   Resultado: todos os clientes parecem vir do mesmo IP e compartilham
 #   a mesma quota de 60/min. A solução é get_ipaddr (slowapi helper) +
