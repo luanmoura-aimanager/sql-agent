@@ -51,3 +51,11 @@ def test_61st_invalid_token_is_429():
         client.post("/query", json=_BODY, headers=_AUTH_BAD)
     r = client.post("/query", json=_BODY, headers=_AUTH_BAD)
     assert r.status_code == 429
+
+
+def test_health_exempt_from_rate_limit():
+    """/health never 429s — @limiter.exempt keeps LB probes from tripping the limit."""
+    client = TestClient(app)
+    for i in range(100):
+        r = client.get("/health")
+        assert r.status_code == 200, f"request {i + 1} got {r.status_code}"

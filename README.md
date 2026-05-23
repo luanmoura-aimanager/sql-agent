@@ -307,3 +307,13 @@ ANTHROPIC_API_KEY = "sk-ant-..."
 `SQL_AGENT_DB_PATH` is optional — it defaults to `"store.db"` in the working directory, which is where Streamlit Cloud places the repo root. Set it explicitly only if you want to point at a different database file.
 
 The `mcp/` directory must be committed to the repo so the server script is available at runtime.
+
+## Roadmap / Side-missions
+
+Items that are not blocking current work but **must be resolved before a production deploy**.
+
+| Priority | Item | Context |
+|----------|------|---------|
+| 🔴 Before deploy | **X-Forwarded-For / reverse proxy** | `get_remote_address` reads `request.client.host` (proxy IP, not client IP). All clients share the same rate-limit quota behind nginx/ALB/Cloudflare. Fix: `get_ipaddr` helper + uvicorn `--forwarded-allow-ips` or `ProxyHeadersMiddleware`. Forging `X-Forwarded-For` is a known vuln — only trust the header from known proxy IPs. See `main.py` `TODO(deploy)` comment. |
+| 🟡 Multi-worker | **Redis backend for rate-limit storage** | In-memory storage resets on restart and is not shared across uvicorn workers. Needs `slowapi` Redis backend when going multi-instance. |
+| 🟡 RFC 6750 | **WWW-Authenticate header on 401s** | 401 responses should include `WWW-Authenticate: Bearer realm="sql-agent"` per RFC 6750. Currently missing. Tracked from PR #22/#23 auth governance work. |
