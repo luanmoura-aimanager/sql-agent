@@ -5,7 +5,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List
 
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: PLC2701
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
@@ -27,6 +27,16 @@ app = FastAPI()
 #   socket TCP). Storage default é in-memory: um dict no processo do uvicorn.
 #   Reinicia → zera. Multi-worker → cada worker tem o seu (problema a
 #   resolver com Redis quando entrar deploy multi-instância).
+#
+#   SIDE-MISSION — reverse proxy footgun: em deploy real (nginx/ALB/
+#   Cloudflare), request.client.host é o IP do proxy, não do cliente.
+#   Resultado: todos os clientes parecem vir do mesmo IP e compartilham
+#   a mesma quota de 60/min. A solução é get_ipaddr (slowapi helper) +
+#   X-Forwarded-For, mas requer uvicorn com --forwarded-allow-ips ou
+#   ProxyHeadersMiddleware configurado corretamente (confiar cegamente
+#   em X-Forwarded-For é vuln — cliente pode forjar). Não muda nada
+#   agora (rodando local), mas tem que ser resolvido antes de qualquer
+#   deploy atrás de proxy.
 #
 # default_limits: aplicam a todas as rotas. /health é exemptado abaixo
 # pra não enfiar 429 em health check de load balancer.
