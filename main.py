@@ -13,17 +13,27 @@ app = FastAPI()
 EXPECTED_TOKEN = os.environ["API_TOKEN"]
 
 
-def verify_token(authorization: str = Header(...)) -> None:
+def verify_token(authorization: str | None = Header(None)) -> None:
     """
     Valida o header Authorization da request.
 
     Espera o formato 'Bearer <token>'. Compara com EXPECTED_TOKEN
     (lido do env no startup). Rejeita qualquer outra coisa com 401.
 
-    O Header(...) faz o FastAPI extrair o header HTTP 'Authorization'
-    automaticamente. Os '...' (Ellipsis) marcam o parâmetro como obrigatório
-    — sem o header, FastAPI já devolve 422 antes mesmo de entrar na função.
+    Por que Header(None) e não Header(...)?
+      - Header(...) marca o parâmetro como REQUIRED no schema do FastAPI.
+        Quando o header falta, o FastAPI corta a request com 422
+        (validation error) ANTES de chamar essa função.
+      - 422 é semanticamente "request malformada" (schema). O caso
+        "cliente não mandou credenciais" é 401 ("unauthorized").
+        Manter os dois separados ajuda quem consome a API a tratar os
+        casos certo (ex: refresh de token vs corrigir o payload).
+      - Header(None) faz o header ser opcional do ponto de vista do
+        schema; a checagem de presença vira responsabilidade desta
+        função, que devolve 401 consistentemente.
     """
+    if authorization is None:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid auth scheme")
 
