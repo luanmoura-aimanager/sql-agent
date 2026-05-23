@@ -5,7 +5,45 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+
 app = FastAPI()
+
+# Rate limiting (camada IP — aplica ANTES do auth).
+#
+# Por que middleware e não @limiter.limit decorator?
+#   Em FastAPI, o ciclo é: matcheia rota → resolve TODOS os Depends
+#   (incluindo verify_token) → SÓ ENTÃO chama a função (que é onde o
+#   decorator do slowapi rodaria). Ou seja, decorator roda DEPOIS do auth.
+#   Pra rate limit defender contra brute force de token, ele tem que
+#   rodar ANTES — e middleware roda fora do ciclo de Depends, antes
+#   de qualquer dispatch.
+#
+# key_func: como identificar quem está fazendo o request.
+#   get_remote_address lê request.client.host (IP do cliente que abriu o
+#   socket TCP). Storage default é in-memory: um dict no processo do uvicorn.
+#   Reinicia → zera. Multi-worker → cada worker tem o seu (problema a
+#   resolver com Redis quando entrar deploy multi-instância).
+#
+# default_limits: aplicam a todas as rotas. /health é exemptado abaixo
+# pra não enfiar 429 em health check de load balancer.
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["60/minute", "500/hour"],
+    # headers_enabled liga: X-RateLimit-Limit, X-RateLimit-Remaining,
+    # X-RateLimit-Reset e Retry-After nas respostas. Sem isso, cliente
+    # que toma 429 não sabe quando retentar.
+    headers_enabled=True,
+)
+app.state.limiter = limiter
+# Handler que converte RateLimitExceeded → response 429.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Middleware que faz a checagem antes do dispatch da rota.
+app.add_middleware(SlowAPIMiddleware)
+
 
 # Lê o token esperado uma vez, no startup. Se a env var não estiver setada,
 # fail-fast: o servidor não sobe sem ela. É preferível quebrar no boot
@@ -54,14 +92,15 @@ class QueryResponse(BaseModel):
     answer: str
 
 @app.get("/health")
+@limiter.exempt
 async def health():
     return {"status": "ok"}
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest, _: None = Depends(verify_token)):
+async def query(body: QueryRequest, _: None = Depends(verify_token)):
     try:
-        history = [{"role": m.role, "content": m.content} for m in request.history]
-        answer = run_agent(request.question, history)
+        history = [{"role": m.role, "content": m.content} for m in body.history]
+        answer = run_agent(body.question, history)
         return QueryResponse(answer=answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
