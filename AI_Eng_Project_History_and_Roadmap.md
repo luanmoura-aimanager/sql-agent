@@ -208,7 +208,11 @@ Todos os projetos e deliverables vivem em **`~/ai-projects/`**. Repos:
   - `SlowAPIMiddleware` com `default_limits=["60/minute", "500/hour"]`, `headers_enabled=True`, key por IP. `/health` exemptado. Smoke test (TestClient, 4 casos) — incluindo burst com token inválido devolvendo 429 (prova que limit aplica antes do auth → brute force barrado). PR #23 (23/05/2026).
   - **Aprendizado-chave (não-óbvio):** `@limiter.limit` decorator NÃO roda antes do `Depends(verify_token)`. FastAPI resolve TODOS os Depends antes de chamar a função, e o decorator embrulha a função — então decorator roda *depois* do auth. Pra rate limit defender contra brute force, **tem que ser middleware** (que roda fora do ciclo de Depends). O smoke test pegou esse erro de modelo mental.
 - **Side-mission técnica:** keyring do macOS travando `pip install` / `import` resolvido com `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` + venv recriado. Documentado em memória.
-- **Próximo (Sessão B do split):** rate limit por token validado (`30/min, 200/hora`) depois do auth — implementação via `@limiter.limit` decorator com `key_func` customizada (token validado), ou via segundo middleware/Depends. Decidir abordagem no início da sessão. Branch: `feat/rate-limit-token`. Depois disso: telemetria estruturada (logs com request_id/latência/cost), cost attribution por chamada.
+- **Governança — rate limit por token (Sessão B do split):**
+  - `@token_limiter.limit("30/minute;200/hour")` em `/query` com `key_func=get_token_key` extraindo o Bearer token do header `Authorization`. Roda depois do `Depends(verify_token)` — só tokens válidos consomem quota. PR #25 (25/05/2026).
+  - **Aprendizado-chave (não-óbvio):** usar o mesmo `Limiter` para o decorator e o middleware desliga o IP layer para a rota — `SlowAPIMiddleware._should_exempt()` pula rotas que estão em `limiter._route_limits`. Solução: segundo `Limiter` separado (`token_limiter`) para o decorator, mantendo `/query` fora do `limiter._route_limits` e preservando o IP check. Documentado no PR #25.
+  - 4 testes cobrindo: token isolado (30 reqs → 200, 31º → 429 + `retry-after`), quotas separadas por token, e coexistência dos dois layers (IP counter e token counter independentes).
+- **Próximo:** telemetria estruturada — logs com `request_id`, latência por chamada, custo de token (input/output). Cost attribution por chamada de agente. Próximo bloco da camada de governança antes de fechar para Deployment.
 
 ### Coberto no Capítulo 2
 - MCP — protocolo, servidor, integração no `sql-agent` (sqlite-mcp-server)
