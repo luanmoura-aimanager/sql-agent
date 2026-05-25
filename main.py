@@ -1,7 +1,7 @@
 import os
 
 from agent import run_agent
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from typing import List
 
@@ -51,6 +51,31 @@ limiter = Limiter(
 app.state.limiter = limiter
 # Handler que converte RateLimitExceeded → response 429.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def get_token_key(request: Request) -> str:
+    """Extrai o bearer token do header Authorization como chave do rate limit."""
+    auth = request.headers.get("authorization", "")
+    return f"token:{auth.removeprefix('Bearer ').strip()}"
+
+
+# Limiter separado para rate limit por TOKEN (camada pós-auth).
+#
+# Por que um segundo Limiter e não reusar o mesmo `limiter`?
+#   SlowAPIMiddleware._should_exempt() pula rotas que estão em
+#   limiter._route_limits. Se usarmos @limiter.limit no /query,
+#   o middleware para de verificar os default limits (60/min IP) para
+#   essa rota — os dois layers entram em conflito.
+#   Com um Limiter separado, /query NÃO aparece em limiter._route_limits,
+#   então o middleware continua aplicando o IP limit normalmente.
+#   O decorator do token_limiter roda depois do auth (Depends) e aplica
+#   o limit por token de forma independente.
+token_limiter = Limiter(
+    key_func=get_token_key,
+    default_limits=[],
+    headers_enabled=True,
+)
+
 # Middleware que faz a checagem antes do dispatch da rota.
 app.add_middleware(SlowAPIMiddleware)
 
@@ -107,7 +132,8 @@ async def health():
     return {"status": "ok"}
 
 @app.post("/query", response_model=QueryResponse)
-async def query(body: QueryRequest, _: None = Depends(verify_token)):
+@token_limiter.limit("30/minute;200/hour")
+async def query(request: Request, response: Response, body: QueryRequest, _: None = Depends(verify_token)):
     try:
         history = [{"role": m.role, "content": m.content} for m in body.history]
         answer = run_agent(body.question, history)
