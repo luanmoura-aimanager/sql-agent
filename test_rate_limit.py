@@ -48,8 +48,9 @@ def test_two_tokens_have_separate_quotas(mock_agent):
         client = TestClient(app)
         headers_a = {"Authorization": "Bearer token-aaa"}
         headers_b = {"Authorization": "Bearer token-bbb"}
-        for _ in range(30):
-            client.post("/query", json=_BODY, headers=headers_a)
+        for i in range(30):
+            r = client.post("/query", json=_BODY, headers=headers_a)
+            assert r.status_code == 200, f"warmup request {i + 1} got {r.status_code}"
         assert client.post("/query", json=_BODY, headers=headers_a).status_code == 429
         assert client.post("/query", json=_BODY, headers=headers_b).status_code == 200
     finally:
