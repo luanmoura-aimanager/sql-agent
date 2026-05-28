@@ -273,8 +273,16 @@ async def query(request: Request, response: Response, body: QueryRequest, _: Non
                 "error_type": type(e).__name__,
             },
         )
-        # TODO(security): str(e) no detail vaza interno do agente pro
-        # cliente (stack-equivalente). Categoria C das decisões de 27/05
-        # diz pra nunca logar stack pro cliente — mas mudar isso quebra
-        # contrato atual. Marcar como side-mission separada.
-        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
+        # Detail genérico — NÃO inclui str(e). Razão: categoria C das
+        # decisões de telemetria (27/05/2026) — "nunca pro cliente":
+        # token plaintext, Authorization header, stack traces. str(e)
+        # de exceptions do agente (langgraph, anthropic SDK, sqlite)
+        # rotineiramente vaza nomes de tabela, paths, prompts, ou
+        # excerpts de SQL — equivalente a meio-stack-trace.
+        #
+        # O cliente recebe o request_id via header X-Request-ID
+        # (middleware request_id_middleware). Suporte usa esse id pra
+        # achar o log estruturado, que tem error_type + exc_info completo.
+        # Assim o operador tem visibilidade e o cliente não vê nada útil
+        # pra reconnaissance.
+        raise HTTPException(status_code=500, detail="Internal error")
