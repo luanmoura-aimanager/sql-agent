@@ -1,3 +1,4 @@
+import ipaddress
 import os
 
 from agent import run_agent
@@ -8,9 +9,70 @@ from typing import List
 from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: PLC2701
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 app = FastAPI()
+
+
+# Resolução de IP do cliente respeitando X-Forwarded-For — mas só
+# quando o request veio de um proxy confiável.
+#
+# Por que não usar slowapi.util.get_ipaddr direto?
+#   get_ipaddr lê X-Forwarded-For SEM verificar a origem. Qualquer
+#   cliente pode mandar 'X-Forwarded-For: 1.2.3.4' e burlar o rate
+#   limit por IP (basta variar o header a cada request). É o footgun
+#   clássico de quem ativa XFF sem trust model.
+#
+# Modelo de confiança:
+#   TRUSTED_PROXIES é uma env var opcional, lista de IPs separados por
+#   vírgula (ex: "10.0.0.5,10.0.0.6"). Só quando request.client.host
+#   estiver nessa lista é que XFF é respeitado; caso contrário, fica
+#   valendo o peer IP (request.client.host). Vazio/não setado =
+#   comportamento pre-XFF, idêntico ao get_remote_address.
+#
+# Quando setar:
+#   Em deploy atrás de nginx/ALB/Cloudflare, colocar os IPs internos
+#   dos proxies. Em dev local (sem proxy), deixar vazio.
+#
+# XFF format: "client, proxy1, proxy2" — o IP do cliente real é o
+# primeiro (leftmost). Trim de espaços; header malformado → fallback peer.
+#
+# Normalização: IPs são comparados em forma canônica (ip_address().compressed)
+# pra evitar mismatch por casing/zero-compression no IPv6 — "2001:DB8::1"
+# bate "2001:db8::1". Strings que não parseiam como IP (ex: "testclient" do
+# TestClient, ou typos no env var) caem no fallback raw; isso preserva a
+# comparação literal em dev e mantém typos como entradas inertes (não
+# casam com nenhum peer real, então não criam bypass).
+def _normalize_ip(value: str) -> str:
+    try:
+        return ipaddress.ip_address(value).compressed
+    except ValueError:
+        return value
+
+
+def _parse_trusted_proxies(raw: str | None) -> set[str]:
+    if not raw:
+        return set()
+    return {_normalize_ip(ip.strip()) for ip in raw.split(",") if ip.strip()}
+
+
+TRUSTED_PROXIES = _parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES"))
+
+
+def get_client_ip(request: Request) -> str:
+    # request.client pode ser None em estados anômalos do ASGI (cliente
+    # desconectado antes do dispatch). Cai num bucket compartilhado
+    # "unknown" — não é bypass (sem peer real, sem como rotear a quota).
+    peer = request.client.host if request.client else "unknown"
+    peer = _normalize_ip(peer)
+    # Re-lê o módulo em runtime pra que testes (e SIGHUP-style reloads
+    # eventuais) possam alterar TRUSTED_PROXIES sem reimportar o módulo.
+    trusted = globals()["TRUSTED_PROXIES"]
+    if peer not in trusted:
+        return peer
+    xff = request.headers.get("x-forwarded-for", "")
+    first = xff.split(",")[0].strip()
+    return first or peer
+
 
 # Rate limiting (camada IP — aplica ANTES do auth).
 #
@@ -22,26 +84,15 @@ app = FastAPI()
 #   rodar ANTES — e middleware roda fora do ciclo de Depends, antes
 #   de qualquer dispatch.
 #
-# key_func: como identificar quem está fazendo o request.
-#   get_remote_address lê request.client.host (IP do cliente que abriu o
-#   socket TCP). Storage default é in-memory: um dict no processo do uvicorn.
+# key_func: get_client_ip (definida acima) — XFF-aware com trust check.
+#   Storage default é in-memory: um dict no processo do uvicorn.
 #   Reinicia → zera. Multi-worker → cada worker tem o seu (problema a
 #   resolver com Redis quando entrar deploy multi-instância).
-#
-#   TODO(deploy): reverse proxy footgun — em deploy real (nginx/ALB/
-#   Cloudflare), request.client.host é o IP do proxy, não do cliente.
-#   Resultado: todos os clientes parecem vir do mesmo IP e compartilham
-#   a mesma quota de 60/min. A solução é get_ipaddr (slowapi helper) +
-#   X-Forwarded-For, mas requer uvicorn com --forwarded-allow-ips ou
-#   ProxyHeadersMiddleware configurado corretamente (confiar cegamente
-#   em X-Forwarded-For é vuln — cliente pode forjar). Não muda nada
-#   agora (rodando local), mas tem que ser resolvido antes de qualquer
-#   deploy atrás de proxy.
 #
 # default_limits: aplicam a todas as rotas. /health é exemptado abaixo
 # pra não enfiar 429 em health check de load balancer.
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=get_client_ip,
     default_limits=["60/minute", "500/hour"],
     # headers_enabled liga: X-RateLimit-Limit, X-RateLimit-Remaining,
     # X-RateLimit-Reset e Retry-After nas respostas. Sem isso, cliente

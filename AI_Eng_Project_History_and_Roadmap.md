@@ -212,6 +212,9 @@ Todos os projetos e deliverables vivem em **`~/ai-projects/`**. Repos:
   - `@token_limiter.limit("30/minute;200/hour")` em `/query` com `key_func=get_token_key` extraindo o Bearer token do header `Authorization`. Roda depois do `Depends(verify_token)` — só tokens válidos consomem quota. PR #25 (25/05/2026).
   - **Aprendizado-chave (não-óbvio):** usar o mesmo `Limiter` para o decorator e o middleware desliga o IP layer para a rota — `SlowAPIMiddleware._should_exempt()` pula rotas que estão em `limiter._route_limits`. Solução: segundo `Limiter` separado (`token_limiter`) para o decorator, mantendo `/query` fora do `limiter._route_limits` e preservando o IP check. Documentado no PR #25.
   - 4 testes cobrindo: token isolado (30 reqs → 200, 31º → 429 + `retry-after`), quotas separadas por token, e coexistência dos dois layers (IP counter e token counter independentes).
+- **Side-mission fechada — X-Forwarded-For trust model (27/05/2026):**
+  - `get_client_ip` custom substituindo `get_remote_address`: respeita XFF apenas quando `request.client.host` está em `TRUSTED_PROXIES` (env var, lista de IPs separados por vírgula). Vazio = comportamento antigo (peer IP). Não usa `slowapi.util.get_ipaddr` porque ele lê XFF sem trust check (qualquer cliente burlaria a quota variando o header).
+  - 4 testes: XFF ignorado sem `TRUSTED_PROXIES`; XFF respeitado quando peer trusted; leftmost IP da cadeia (`"client, proxy1, proxy2"`); fallback ao peer em header malformado. TODO(deploy) do XFF removido de `main.py`.
 - **Próximo:** telemetria estruturada — logs com `request_id`, latência por chamada, custo de token (input/output). Cost attribution por chamada de agente. Próximo bloco da camada de governança antes de fechar para Deployment.
 
 ### Coberto no Capítulo 2
@@ -233,13 +236,6 @@ Todos os projetos e deliverables vivem em **`~/ai-projects/`**. Repos:
 - Backfill LinkedIn dos tópicos do Capítulo 1
 - Adicionar header `WWW-Authenticate: Bearer` nas respostas 401 do `/query` (RFC 7235) — vale quando aparecer cliente automatizado consumindo a API
 - Migrar storage do rate limit (slowapi) de in-memory → Redis quando entrar em deployment multi-instância (cai naturalmente no tópico de Deployment do Cap 3)
-- Substituir get_remote_address por get_ipaddr (slowapi) + leitura de X-Forwarded-For
-  quando o sql-agent for deployado atrás de reverse proxy (nginx/ALB/Cloudflare).
-  Hoje request.client.host devolve o IP do proxy, então todos os clientes
-  compartilhariam a mesma quota de 60/min. Pré-requisito: uvicorn com
-  --forwarded-allow-ips ou ProxyHeadersMiddleware configurado — confiar cego em
-  X-Forwarded-For é vulnerabilidade (cliente pode forjar). Cross-ref: TODO(deploy)
-  em main.py linha 31.
 
 ---
 
