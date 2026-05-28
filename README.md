@@ -270,7 +270,7 @@ Requires a Bearer token in the `Authorization` header. The server compares it ag
 | Invalid token (`Bearer wrong`) | `401` — `{"detail": "Invalid token"}` |
 | Non-Bearer scheme | `401` — `{"detail": "Invalid auth scheme"}` |
 | Missing `Authorization` header | `422` (FastAPI schema validation) |
-| Agent raised an exception | `500` — `{"detail": "Agent error: <message>"}` |
+| Agent raised an exception | `500` — `{"detail": "Internal error"}` (genérico — a causa não vaza pro cliente; correlacione pelo header `X-Request-ID` no log estruturado) |
 
 The 422 for missing header is a known wrinkle of using `Header(...)` — semantically it'd be cleaner as 401. Refactor candidate.
 

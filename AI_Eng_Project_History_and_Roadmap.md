@@ -221,7 +221,10 @@ Todos os projetos e deliverables vivem em **`~/ai-projects/`**. Repos:
   - 11 testes (`test_structured_logging.py`): hash determinístico, JSON válido, **log injection** (`\n` + JSON forjado vira uma única linha), request_id UUID4 e propagação ContextVar → header, categoria B (INFO sem `question_text`, DEBUG com).
   - **Decisão tática:** `X-Request-ID` é sempre gerado server-side; cliente não pode setar (vetor de log forge). Comentado em `main.py`.
   - **Aprendizado-chave (não-óbvio):** `ContextVar` em FastAPI requer `reset(token)` no `finally` do middleware mesmo em async — sem isso o valor "vaza" pra fora do scope dentro da mesma task asyncio (entre tasks não vaza por causa do copy-on-write, mas dentro vaza). Sem `reset`, logs pós-request vêem o id da última request.
-- **Pendente parte 2 (próxima sessão):** cost attribution — callback do `ChatAnthropic` capturando `input_tokens`/`output_tokens` do `response_metadata['usage']`, exposto em USD por chamada no log; também tem TODO(security) no `query_failed` (vaza `str(e)` no detail da response — categoria C).
+- **Side-mission fechada — error detail leak no /query (28/05/2026):**
+  - `HTTPException` em `query_failed` trocou `f"Agent error: {str(e)}"` por `detail="Internal error"`. Razão: `str(e)` de exceptions do langgraph/anthropic/sqlite rotineiramente vaza nome de tabela, path, fragmento de prompt ou excerpt de SQL — equivalente a meio-stack-trace pra reconnaissance. Categoria C ("nunca pro cliente") das decisões de 27/05.
+  - 3 testes novos em `test_structured_logging.py`: (1) detail não contém marca distintiva do `str(e)` nem o nome da exception; (2) `X-Request-ID` continua no header em erro (suporte usa pra correlacionar); (3) log estruturado mantém `error_type` + `exc_info` server-side — defesa não cega o operador.
+- **Pendente parte 2 (próxima sessão):** cost attribution — callback do `ChatAnthropic` capturando `input_tokens`/`output_tokens` do `response_metadata['usage']`, exposto em USD por chamada no log. Decisões pré-código a travar: pricing table (env var × JSON × hardcode) e cost por request × agregado por token.
 - **Próximo (depois de cost attribution):** Deployment — Docker, CI/CD, secrets. Encerra a camada de governança.
 
 ### Coberto no Capítulo 2

@@ -71,6 +71,15 @@ class JsonFormatter(logging.Formatter):
     Por que default=str?
       Fallback pra objetos não-JSON (datetime, UUID, etc.) — evita
       crash em runtime quando alguém passa algo inesperado em extra=.
+
+    Por que serializar exc_info num campo "exc_info"?
+      log.exception()/log.error(exc_info=True) anexam o traceback em
+      record.exc_info. A Formatter base concatena isso como texto multi-
+      linha DEPOIS da mensagem; aqui, num JSON de uma linha, isso quebraria
+      o formato. Então renderizamos o traceback via formatException() e o
+      colocamos numa string única (o json.dumps escapa os \\n internos),
+      preservando o stack completo pro operador SEM virar várias linhas de
+      log nem reabrir o vetor de log injection.
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -86,6 +95,14 @@ class JsonFormatter(logging.Formatter):
             if key in _LOGRECORD_BUILTINS or key.startswith("_"):
                 continue
             payload[key] = value
+        # Traceback: só presente quando log.exception() / exc_info=True.
+        # formatException() devolve a string multi-linha do stack; vira
+        # um campo único (json.dumps escapa os \n), então uma entrada de
+        # erro continua sendo UMA linha de log com o stack completo dentro.
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            payload["stack_info"] = self.formatStack(record.stack_info)
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 

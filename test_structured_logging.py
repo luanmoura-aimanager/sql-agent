@@ -223,3 +223,86 @@ def test_debug_logs_full_question_and_answer_text(mock_agent, caplog):
     rec = debug_records[0]
     assert rec.question_text == _BODY["question"]
     assert rec.answer_text == "resposta sensível com PII"
+
+
+# ---------- Error path: response não vaza interno do agente ----------
+
+
+# Marca distintiva — se aparecer na response, é vazamento. Mensagem
+# parece com algo que o stack do agente realmente vazaria (path
+# interno, nome de tabela secreta, prompt fragment).
+_LEAK_MARKER = "INTERNAL_TABLE_pii_customer_pi_2026 prompt:'SELECT secret FROM ...'"
+
+
+@patch("main.run_agent", side_effect=RuntimeError(_LEAK_MARKER))
+def test_500_response_does_not_leak_exception_message(mock_agent):
+    """
+    Erro no agente vira HTTP 500 com detail GENÉRICO — não vaza str(e).
+
+    Vetor que isso defende: exceptions do langgraph/anthropic/sqlite
+    rotineiramente carregam path interno, nome de tabela, fragmento de
+    prompt, ou excerpt de SQL no str(e). Categoria C das decisões de
+    27/05 ("nunca pro cliente"): equivalente a meio-stack-trace que
+    serve pra recon.
+    """
+    client = TestClient(app)
+    r = client.post("/query", json=_BODY, headers=_AUTH_OK)
+    assert r.status_code == 500
+    body = r.json()
+    # Detail é genérico — sem nada do str(e)
+    assert _LEAK_MARKER not in r.text
+    assert "RuntimeError" not in r.text
+    assert "INTERNAL_TABLE" not in r.text
+    # Comportamento esperado: detail simples e estável
+    assert body == {"detail": "Internal error"}
+
+
+@patch("main.run_agent", side_effect=RuntimeError(_LEAK_MARKER))
+def test_500_response_still_carries_request_id_for_support(mock_agent):
+    """
+    Mesmo em erro, X-Request-ID vai no header — suporte usa pra achar
+    o log estruturado correspondente (que tem error_type + stack).
+    O operador tem visibilidade total; o cliente só tem o id.
+    """
+    client = TestClient(app)
+    r = client.post("/query", json=_BODY, headers=_AUTH_OK)
+    assert r.status_code == 500
+    rid = r.headers.get("X-Request-ID")
+    assert rid is not None
+    assert _UUID4_RE.match(rid), f"X-Request-ID em erro não é UUID4: {rid}"
+
+
+@patch("main.run_agent", side_effect=RuntimeError(_LEAK_MARKER))
+def test_500_log_keeps_error_type_for_triage(mock_agent, caplog):
+    """
+    O log estruturado (server-side) MANTÉM error_type — o operador
+    precisa saber se foi RuntimeError do langgraph, AuthError do
+    Anthropic, ou OperationalError do sqlite pra triar.
+
+    Verifica que a defesa (sumir str(e) do cliente) não cega o operador.
+
+    Crucial: a asserção roda sobre o JSON RENDERIZADO pelo JsonFormatter
+    (o que de fato chega no sink/stdout), não só sobre o LogRecord cru —
+    senão o teste passaria mesmo que o formatter descartasse o traceback.
+    """
+    client = TestClient(app)
+    with caplog.at_level(logging.INFO, logger="sql_agent.api"):
+        client.post("/query", json=_BODY, headers=_AUTH_OK)
+    failed_records = [rec for rec in caplog.records if rec.message == "query_failed"]
+    assert len(failed_records) == 1
+    rec = failed_records[0]
+
+    # Renderiza pelo formatter de produção e valida o JSON que sai de fato.
+    rendered = json.loads(JsonFormatter().format(rec))
+    assert rendered["event"] == "query_failed"
+    assert rendered["error_type"] == "RuntimeError"
+    assert rendered["status"] == 500
+    # q_hash bate com o hash da pergunta (correlação por hash não quebra no erro).
+    assert rendered["q_hash"] == hash_text(_BODY["question"])
+    # Traceback COMPLETO server-side: o operador vê o que o cliente não vê.
+    assert "exc_info" in rendered
+    assert "Traceback (most recent call last)" in rendered["exc_info"]
+    assert "RuntimeError" in rendered["exc_info"]
+    assert _LEAK_MARKER in rendered["exc_info"]
+    # E continua sendo UMA linha de log (traceback escapado, não quebra o JSON).
+    assert JsonFormatter().format(rec).count("\n") == 0
