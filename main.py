@@ -1,5 +1,8 @@
 import ipaddress
+import logging
 import os
+import time
+import uuid
 
 from agent import run_agent
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -9,6 +12,14 @@ from typing import List
 from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: PLC2701
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+
+from logging_config import hash_text, request_id_var, setup_logging
+
+# Setup do logging acontece no import — antes de qualquer logger.info()
+# em outros módulos. Idempotente (chamadas repetidas em teste não
+# duplicam handlers).
+setup_logging()
+log = logging.getLogger("sql_agent.api")
 
 app = FastAPI()
 
@@ -131,6 +142,39 @@ token_limiter = Limiter(
 app.add_middleware(SlowAPIMiddleware)
 
 
+# request_id middleware — gera UUID4 por request e disponibiliza:
+#   - via ContextVar (logs do scope herdam automaticamente o id)
+#   - via response header X-Request-ID (cliente pode citar em suporte)
+#
+# Por que NÃO aceitar X-Request-ID do cliente?
+#   Vetor de log forge: cliente podia mandar id de outra request pra
+#   poluir auditoria. Se precisar correlacionar com chamador upstream
+#   no futuro, validar como UUID e marcar 'client_supplied=true' no log.
+#
+# Por que @app.middleware("http") e não BaseHTTPMiddleware classe?
+#   Equivalente sintático; o decorator é mais ergonômico pra closures
+#   curtas como essa.
+#
+# Ordem de execução: middlewares FastAPI são LIFO — o último registrado
+# roda primeiro. Esse aqui é registrado DEPOIS do SlowAPIMiddleware, então
+# roda PRIMEIRO no request — e o ContextVar já está setado quando o
+# SlowAPI faz o rate limit check (se a gente decidir logar 429s no futuro).
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = str(uuid.uuid4())
+    token = request_id_var.set(rid)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        # reset() é importante: em ambiente single-thread async, o
+        # ContextVar carrega o último valor pra fora do scope se a
+        # gente não der reset. Não vaza entre tasks (cada task tem o seu
+        # copy-on-write), mas vaza dentro da mesma task pós-request.
+        request_id_var.reset(token)
+
+
 # Lê o token esperado uma vez, no startup. Se a env var não estiver setada,
 # fail-fast: o servidor não sobe sem ela. É preferível quebrar no boot
 # do que aceitar requests sem auth por engano.
@@ -185,9 +229,52 @@ async def health():
 @app.post("/query", response_model=QueryResponse)
 @token_limiter.limit("30/minute;200/hour")
 async def query(request: Request, response: Response, body: QueryRequest, _: None = Depends(verify_token)):
+    # Latency: perf_counter (monotonic, alta resolução). Não usa
+    # time.time() pra evitar pulos por NTP sync.
+    t0 = time.perf_counter()
+    q_hash = hash_text(body.question)
     try:
         history = [{"role": m.role, "content": m.content} for m in body.history]
         answer = run_agent(body.question, history)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        # INFO: categoria A (latência, status) + categoria B com hash.
+        # answer fica sem hash (só len) — vetor de PII alto, hash raramente útil.
+        log.info(
+            "query_handled",
+            extra={
+                "q_hash": q_hash,
+                "answer_len": len(answer),
+                "history_len": len(body.history),
+                "latency_ms": latency_ms,
+                "status": 200,
+            },
+        )
+        # DEBUG: texto completo de question e answer. Só sai se o root
+        # logger estiver em DEBUG (env var LOG_LEVEL ou setup explícito
+        # em incident response). isEnabledFor evita o custo de montar
+        # o extra se ninguém vai consumir.
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "query_debug",
+                extra={
+                    "question_text": body.question,
+                    "answer_text": answer,
+                },
+            )
         return QueryResponse(answer=answer)
     except Exception as e:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        log.exception(
+            "query_failed",
+            extra={
+                "q_hash": q_hash,
+                "latency_ms": latency_ms,
+                "status": 500,
+                "error_type": type(e).__name__,
+            },
+        )
+        # TODO(security): str(e) no detail vaza interno do agente pro
+        # cliente (stack-equivalente). Categoria C das decisões de 27/05
+        # diz pra nunca logar stack pro cliente — mas mudar isso quebra
+        # contrato atual. Marcar como side-mission separada.
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")

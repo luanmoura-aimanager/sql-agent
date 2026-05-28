@@ -215,7 +215,14 @@ Todos os projetos e deliverables vivem em **`~/ai-projects/`**. Repos:
 - **Side-mission fechada — X-Forwarded-For trust model (27/05/2026):**
   - `get_client_ip` custom substituindo `get_remote_address`: respeita XFF apenas quando `request.client.host` está em `TRUSTED_PROXIES` (env var, lista de IPs separados por vírgula). Vazio = comportamento antigo (peer IP). Não usa `slowapi.util.get_ipaddr` porque ele lê XFF sem trust check (qualquer cliente burlaria a quota variando o header).
   - 4 testes: XFF ignorado sem `TRUSTED_PROXIES`; XFF respeitado quando peer trusted; leftmost IP da cadeia (`"client, proxy1, proxy2"`); fallback ao peer em header malformado. TODO(deploy) do XFF removido de `main.py`.
-- **Próximo:** telemetria estruturada — logs com `request_id`, latência por chamada, custo de token (input/output). Cost attribution por chamada de agente. Próximo bloco da camada de governança antes de fechar para Deployment.
+- **Governança — structured logging (parte 1, 27/05/2026):**
+  - Design travado em 5 decisões: stdlib `logging` + `JsonFormatter` custom; categoria B (PII) com hash em INFO e texto em DEBUG (por campo: `question` hash, `sql_generated` hash+len, `answer` só `len`); sampling 100%; destino stdout (12-factor); defesa de log injection via `json.dumps`. Razões em `logging_config.py`.
+  - Implementado: `logging_config.py` (JsonFormatter, `hash_text`, `setup_logging`, `request_id_var` ContextVar); middleware `@app.middleware("http")` no `main.py` gerando UUID4 por request, propagando via ContextVar e expondo no header `X-Request-ID`; log estruturado em `/query` com `q_hash`, `answer_len`, `history_len`, `latency_ms`, `status` em INFO + `question_text`/`answer_text` em DEBUG.
+  - 11 testes (`test_structured_logging.py`): hash determinístico, JSON válido, **log injection** (`\n` + JSON forjado vira uma única linha), request_id UUID4 e propagação ContextVar → header, categoria B (INFO sem `question_text`, DEBUG com).
+  - **Decisão tática:** `X-Request-ID` é sempre gerado server-side; cliente não pode setar (vetor de log forge). Comentado em `main.py`.
+  - **Aprendizado-chave (não-óbvio):** `ContextVar` em FastAPI requer `reset(token)` no `finally` do middleware mesmo em async — sem isso o valor "vaza" pra fora do scope dentro da mesma task asyncio (entre tasks não vaza por causa do copy-on-write, mas dentro vaza). Sem `reset`, logs pós-request vêem o id da última request.
+- **Pendente parte 2 (próxima sessão):** cost attribution — callback do `ChatAnthropic` capturando `input_tokens`/`output_tokens` do `response_metadata['usage']`, exposto em USD por chamada no log; também tem TODO(security) no `query_failed` (vaza `str(e)` no detail da response — categoria C).
+- **Próximo (depois de cost attribution):** Deployment — Docker, CI/CD, secrets. Encerra a camada de governança.
 
 ### Coberto no Capítulo 2
 - MCP — protocolo, servidor, integração no `sql-agent` (sqlite-mcp-server)
