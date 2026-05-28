@@ -280,6 +280,10 @@ def test_500_log_keeps_error_type_for_triage(mock_agent, caplog):
     Anthropic, ou OperationalError do sqlite pra triar.
 
     Verifica que a defesa (sumir str(e) do cliente) não cega o operador.
+
+    Crucial: a asserção roda sobre o JSON RENDERIZADO pelo JsonFormatter
+    (o que de fato chega no sink/stdout), não só sobre o LogRecord cru —
+    senão o teste passaria mesmo que o formatter descartasse o traceback.
     """
     client = TestClient(app)
     with caplog.at_level(logging.INFO, logger="sql_agent.api"):
@@ -287,8 +291,18 @@ def test_500_log_keeps_error_type_for_triage(mock_agent, caplog):
     failed_records = [rec for rec in caplog.records if rec.message == "query_failed"]
     assert len(failed_records) == 1
     rec = failed_records[0]
-    assert rec.error_type == "RuntimeError"
-    assert rec.status == 500
-    assert hasattr(rec, "q_hash")
-    # exc_info preservado (log.exception adiciona automaticamente)
-    assert rec.exc_info is not None
+
+    # Renderiza pelo formatter de produção e valida o JSON que sai de fato.
+    rendered = json.loads(JsonFormatter().format(rec))
+    assert rendered["event"] == "query_failed"
+    assert rendered["error_type"] == "RuntimeError"
+    assert rendered["status"] == 500
+    # q_hash bate com o hash da pergunta (correlação por hash não quebra no erro).
+    assert rendered["q_hash"] == hash_text(_BODY["question"])
+    # Traceback COMPLETO server-side: o operador vê o que o cliente não vê.
+    assert "exc_info" in rendered
+    assert "Traceback (most recent call last)" in rendered["exc_info"]
+    assert "RuntimeError" in rendered["exc_info"]
+    assert _LEAK_MARKER in rendered["exc_info"]
+    # E continua sendo UMA linha de log (traceback escapado, não quebra o JSON).
+    assert JsonFormatter().format(rec).count("\n") == 0
