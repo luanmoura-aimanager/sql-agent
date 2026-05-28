@@ -129,3 +129,24 @@ def test_xff_malformed_falls_back_to_peer(_trust_testclient):
         assert r.status_code == 401, f"req {i + 1} got {r.status_code}"
     # 61º bate 429
     assert client.post("/query", json=_BODY, headers=bad_headers).status_code == 429
+
+
+def test_trusted_proxies_normalizes_ipv6():
+    """
+    IPv6 em TRUSTED_PROXIES é normalizado pra forma canônica (lowercase,
+    zero compression). Sem isso, peer chegando como "2001:DB8::1" não
+    bateria com TRUSTED_PROXIES="2001:db8::1" e o trust check falharia
+    silenciosamente.
+    """
+    parsed = main._parse_trusted_proxies("2001:DB8::1, 10.0.0.5")
+    assert parsed == {"2001:db8::1", "10.0.0.5"}
+
+
+def test_trusted_proxies_keeps_unparseable_as_raw():
+    """
+    String não-IP (ex: 'testclient' do TestClient, ou typo) é mantida
+    como raw. Garante que comparação literal continua funcionando em dev
+    e que typos no env var não viram bypass — só não casam com peer real.
+    """
+    parsed = main._parse_trusted_proxies("testclient,10.0.0..5")
+    assert parsed == {"testclient", "10.0.0..5"}

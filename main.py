@@ -1,3 +1,4 @@
+import ipaddress
 import os
 
 from agent import run_agent
@@ -34,17 +35,35 @@ app = FastAPI()
 #
 # XFF format: "client, proxy1, proxy2" — o IP do cliente real é o
 # primeiro (leftmost). Trim de espaços; header malformado → fallback peer.
+#
+# Normalização: IPs são comparados em forma canônica (ip_address().compressed)
+# pra evitar mismatch por casing/zero-compression no IPv6 — "2001:DB8::1"
+# bate "2001:db8::1". Strings que não parseiam como IP (ex: "testclient" do
+# TestClient, ou typos no env var) caem no fallback raw; isso preserva a
+# comparação literal em dev e mantém typos como entradas inertes (não
+# casam com nenhum peer real, então não criam bypass).
+def _normalize_ip(value: str) -> str:
+    try:
+        return ipaddress.ip_address(value).compressed
+    except ValueError:
+        return value
+
+
 def _parse_trusted_proxies(raw: str | None) -> set[str]:
     if not raw:
         return set()
-    return {ip.strip() for ip in raw.split(",") if ip.strip()}
+    return {_normalize_ip(ip.strip()) for ip in raw.split(",") if ip.strip()}
 
 
 TRUSTED_PROXIES = _parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES"))
 
 
 def get_client_ip(request: Request) -> str:
+    # request.client pode ser None em estados anômalos do ASGI (cliente
+    # desconectado antes do dispatch). Cai num bucket compartilhado
+    # "unknown" — não é bypass (sem peer real, sem como rotear a quota).
     peer = request.client.host if request.client else "unknown"
+    peer = _normalize_ip(peer)
     # Re-lê o módulo em runtime pra que testes (e SIGHUP-style reloads
     # eventuais) possam alterar TRUSTED_PROXIES sem reimportar o módulo.
     trusted = globals()["TRUSTED_PROXIES"]
