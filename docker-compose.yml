@@ -1,0 +1,36 @@
+# Postgres pra cost events. Volume nomeado persiste dados entre `docker compose
+# down` e `up` (mas é apagado com `docker compose down -v`).
+#
+# Porta 5432 default — se você já tem outro Postgres rodando na máquina,
+# muda pra 5433:5432 e ajusta DATABASE_URL no .env.
+#
+# Imagem alpine porque é pequena (~80MB vs ~430MB da regular) e suficiente
+# pra dev local. Em produção, geralmente vira RDS / Cloud SQL / Supabase
+# managed — fora do escopo do docker-compose local.
+#
+# healthcheck: garante que `docker compose up -d` só retorne quando o
+# Postgres realmente aceita conexão. Sem isso, app starta antes do DB
+# ficar pronto e falha no primeiro connect.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sql-agent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sql_agent
+      POSTGRES_PASSWORD: sql_agent_dev
+      POSTGRES_DB: sql_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sql_agent -d sql_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    name: sql-agent-postgres-data

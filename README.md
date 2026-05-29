@@ -231,6 +231,29 @@ uvicorn main:app --reload
 
 The MCP server is spawned automatically — no separate process to start.
 
+## Cost events DB (local dev)
+
+A second database — Postgres — holds **cost events**: append-only audit log of LLM calls (tokens in/out, USD cost, model, request_id). This is separate from `store.db` (the agent's read-only data source) and from the structured stdout logs (telemetry). Postgres is the persistence layer for billing-grade auditability; stdout logs cover observability; SQLite serves agent queries.
+
+```bash
+# 1. Spin up Postgres locally (docker-compose.yml)
+docker compose up -d
+
+# 2. Copy env and adjust if needed (DATABASE_URL casa com docker-compose por default).
+#    db.py carrega o .env automaticamente (python-dotenv) — não precisa exportar.
+cp .env.example .env
+
+# 3. (One-time) install the new deps
+pip install -r requirements.txt
+
+# 4. Smoke test — creates the cost_events table, inserts a row, reads it back
+python scripts/smoke_cost_events.py
+```
+
+Schema lives in `db.py` as a SQLAlchemy 2.0 `Table` object. In this session (D-1) the table is created via `metadata.create_all()` directly. The next session (D-2) introduces Alembic so schema changes become versioned migrations.
+
+To stop Postgres: `docker compose down` (volume persists) or `docker compose down -v` (wipes data).
+
 ## REST API (`main.py`)
 
 A FastAPI interface is available alongside the Streamlit UI, exposing the same agent logic over HTTP.

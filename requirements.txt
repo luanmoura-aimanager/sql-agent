@@ -9,3 +9,12 @@ pyyaml>=6.0.0
 fastapi>=0.115.0
 uvicorn>=0.34.0
 slowapi>=0.1.9
+
+# Postgres + async stack pra cost events (Cap 3 — auditability/billing).
+# sqlalchemy 2.0 async Core + asyncpg como driver + alembic pra migrations.
+# python-dotenv carrega .env (db.py) pra o setup do README funcionar.
+# Pisos de minor (não só major) seguindo o padrão do resto do arquivo.
+sqlalchemy[asyncio]>=2.0.20
+asyncpg>=0.29.0
+alembic>=1.13.0
+python-dotenv>=1.0.0
