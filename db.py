@@ -27,6 +27,7 @@ Decisões travadas (ver project_sql_agent_2026_05_29 na memória):
 """
 import os
 
+from dotenv import load_dotenv
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -42,6 +43,12 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+# Carrega .env se existir. Faz o `cp .env.example .env` do README funcionar
+# de fato — sem isso, db.py lê os.environ direto e o passo do smoke quebra
+# com KeyError mesmo seguindo a doc à risca. load_dotenv não sobrescreve
+# vars já setadas no shell (precedência: shell > .env), então é seguro.
+load_dotenv()
 
 
 # Naming convention pra constraints. Sem isso, Alembic gera nomes
@@ -144,45 +151,74 @@ cost_events = Table(
     CheckConstraint("input_tokens >= 0", name="input_tokens_non_negative"),
     CheckConstraint("output_tokens >= 0", name="output_tokens_non_negative"),
     CheckConstraint("cost_usd >= 0", name="cost_usd_non_negative"),
-    Index(
-        "ix_cost_events_token_hash_occurred_at",
-        "token_hash",
-        "occurred_at",
-        postgresql_using="btree",
-    ),
-    Index("ix_cost_events_request_id", "request_id"),
 )
+
+# Índices definidos fora da Table pra poder referenciar a coluna como
+# expressão (occurred_at.desc()) — a forma string-only de dentro da Table
+# não permite especificar direção. btree é o default do Postgres, então
+# não precisa de postgresql_using explícito.
+Index(
+    "ix_cost_events_token_hash_occurred_at",
+    cost_events.c.token_hash,
+    # DESC de verdade: a query principal ("quanto X gastou desde Y?") lê
+    # do mais recente pra trás. Índice descendente serve esse ORDER BY
+    # sem reverse scan.
+    cost_events.c.occurred_at.desc(),
+)
+Index("ix_cost_events_request_id", cost_events.c.request_id)
 
 
 # ----------------------------------------------------------------------
 # Engine
 # ----------------------------------------------------------------------
 #
-# Singleton de módulo. Criado uma vez no import; reusado por todo
-# request handler. Pool gerencia as conexões internas.
+# Singleton lazy. Criado na PRIMEIRA vez que `engine` é usado, não no
+# import. Pool gerencia as conexões internas.
+#
+# Por que lazy e não no import? Ler DATABASE_URL no nível do módulo faz
+# qualquer `import db` crashar com KeyError quando a var não está setada
+# — inclusive coleta de pytest se um módulo testado (futuro main.py em
+# D-3) importar db transitivamente. Adiar a leitura pro primeiro uso
+# preserva o fail-fast onde importa (servidor que tenta usar o DB sem
+# config morre na hora) sem transformar o import num campo minado.
 #
 # Por que ler DATABASE_URL via os.environ direto e não via Pydantic
 # Settings ou similar? Mantemos a barra baixa: pattern de env var
 # direto é o que já temos no resto do app (API_TOKEN, TRUSTED_PROXIES).
 # Settings class virá quando crescer pra justificar.
 #
-# Por que fail-fast (KeyError) se DATABASE_URL não setada?
+# Por que fail-fast (KeyError) no primeiro uso se DATABASE_URL não setada?
 # Servidor sem DB conectável é um zombie útil pra request, inútil pra
-# billing. Melhor crashar no boot do que processar request por horas e
-# perder INSERT silenciosamente. Mesma filosofia do API_TOKEN.
+# billing. Melhor crashar do que processar request por horas e perder
+# INSERT silenciosamente. Mesma filosofia do API_TOKEN.
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+_engine: AsyncEngine | None = None
 
 
-engine: AsyncEngine = create_async_engine(
-    DATABASE_URL,
-    pool_size=5,           # conexões permanentes idle prontas
-    max_overflow=10,       # picos toleráveis antes de saturar Postgres
-    pool_timeout=30,       # segundos de espera antes de raise
-    pool_recycle=3600,     # recicla a cada 1h (anti-zumbi via NAT/firewall)
-    pool_pre_ping=True,    # SELECT 1 antes de checkout (anti-flake)
-    echo=False,            # True = SQL no log (útil em dev manual)
-)
+def get_engine() -> AsyncEngine:
+    """Engine singleton, criado sob demanda. Lê DATABASE_URL na primeira
+    chamada (fail-fast com KeyError se ausente). Reusado nas seguintes."""
+    global _engine
+    if _engine is None:
+        _engine = create_async_engine(
+            os.environ["DATABASE_URL"],
+            pool_size=5,           # conexões permanentes idle prontas
+            max_overflow=10,       # picos toleráveis antes de saturar Postgres
+            pool_timeout=30,       # segundos de espera antes de raise
+            pool_recycle=3600,     # recicla a cada 1h (anti-zumbi via NAT/firewall)
+            pool_pre_ping=True,    # SELECT 1 antes de checkout (anti-flake)
+            echo=False,            # True = SQL no log (útil em dev manual)
+        )
+    return _engine
+
+
+def __getattr__(name: str):
+    """PEP 562: `db.engine` resolve pro singleton lazy sem leitura no import.
+    Mantém a ergonomia `db.engine` pra chamadores (smoke, futuros handlers)
+    enquanto adia DATABASE_URL pro primeiro acesso de verdade."""
+    if name == "engine":
+        return get_engine()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ----------------------------------------------------------------------
@@ -199,11 +235,11 @@ engine: AsyncEngine = create_async_engine(
 # antes de adicionar a camada de Alembic em cima.
 async def init_db() -> None:
     """Cria todas as tabelas do metadata. NÃO usar em prod — só dev/smoke."""
-    async with engine.begin() as conn:
+    async with get_engine().begin() as conn:
         await conn.run_sync(metadata.create_all)
 
 
 async def drop_db() -> None:
     """Drop todas as tabelas. Apenas pra cleanup de smoke/testes."""
-    async with engine.begin() as conn:
+    async with get_engine().begin() as conn:
         await conn.run_sync(metadata.drop_all)

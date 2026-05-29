@@ -239,7 +239,8 @@ A second database — Postgres — holds **cost events**: append-only audit log 
 # 1. Spin up Postgres locally (docker-compose.yml)
 docker compose up -d
 
-# 2. Copy env and adjust if needed (DATABASE_URL casa com docker-compose por default)
+# 2. Copy env and adjust if needed (DATABASE_URL casa com docker-compose por default).
+#    db.py carrega o .env automaticamente (python-dotenv) — não precisa exportar.
 cp .env.example .env
 
 # 3. (One-time) install the new deps
