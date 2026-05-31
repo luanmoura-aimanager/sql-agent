@@ -283,6 +283,22 @@ async def query(request: Request, response: Response, body: QueryRequest, _: Non
                         "pricing_version": pricing_version,
                     },
                 )
+        elif call_count > 0:
+            # Houve chamada de LLM (tokens foram gastos) mas o callback não
+            # conseguiu extrair model_name por nenhum dos fallbacks — sem
+            # modelo não dá pra precificar, então não há INSERT. Loga WARNING
+            # pra o evento não sumir em silêncio: sem isso a tabela de cost
+            # subnotificaria gasto real e ninguém saberia. Sinal acionável
+            # (pricing/callback precisa de atenção) em vez de perda muda.
+            log.warning(
+                "cost_event_skipped_no_model",
+                extra={
+                    "q_hash": q_hash,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "llm_call_count": call_count,
+                },
+            )
 
         # INFO: categoria A (latência, status) + categoria B com hash.
         # Cost fields entram aqui pra log aggregator agrupar por token_hash

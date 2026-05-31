@@ -76,6 +76,23 @@ def _load() -> PricingTable:
 
 _TABLE: PricingTable = _load()
 
+# Constantes Decimal construídas UMA vez no import. Antes eram recriadas
+# a cada calculate_cost_usd (Decimal(str(float)) + Decimal("1000000") +
+# Decimal("0.00000001")); como os valores são estáticos, pré-converter
+# evita reconstruir os mesmos objetos a cada request no hot path.
+_MTOK = Decimal("1000000")
+# Schema é NUMERIC(12, 8) — 8 casas decimais. Quantum fixo pro quantize.
+_QUANTUM = Decimal("0.00000001")
+# Preços por modelo já como Decimal exato (str() no float evita contaminar
+# com imprecisão do float ao virar Decimal). Chave = model_name.
+_DECIMAL_PRICES: dict[str, tuple[Decimal, Decimal]] = {
+    name: (
+        Decimal(str(prices["input_per_mtok"])),
+        Decimal(str(prices["output_per_mtok"])),
+    )
+    for name, prices in _TABLE["models"].items()
+}
+
 
 def get_version() -> str:
     """Versão da tabela pra registrar em cada cost_event (auditabilidade)."""
@@ -91,19 +108,14 @@ def calculate_cost_usd(
     que pricing.json precisa ser atualizado antes de processar requests
     com esse modelo.
     """
-    if model_name not in _TABLE["models"]:
+    if model_name not in _DECIMAL_PRICES:
         raise KeyError(
             f"Modelo {model_name!r} não está em pricing.json — "
             f"atualize pricing.json antes de processar requests."
         )
-    prices = _TABLE["models"][model_name]
-    # Decimal sobre Decimal preserva precisão; usar str() no float pra
-    # evitar contaminação de imprecisão do float ao virar Decimal.
-    input_price = Decimal(str(prices["input_per_mtok"]))
-    output_price = Decimal(str(prices["output_per_mtok"]))
-    mtok = Decimal("1000000")
-    cost = (Decimal(input_tokens) / mtok) * input_price
-    cost += (Decimal(output_tokens) / mtok) * output_price
-    # Schema é NUMERIC(12, 8) — 8 casas decimais. Quantize pra não
-    # passar precisão maior pro DB (que truncaria silenciosamente).
-    return cost.quantize(Decimal("0.00000001"))
+    input_price, output_price = _DECIMAL_PRICES[model_name]
+    cost = (Decimal(input_tokens) / _MTOK) * input_price
+    cost += (Decimal(output_tokens) / _MTOK) * output_price
+    # Quantize pra não passar precisão maior que NUMERIC(12, 8) pro DB
+    # (que truncaria silenciosamente).
+    return cost.quantize(_QUANTUM)

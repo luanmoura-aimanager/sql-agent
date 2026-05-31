@@ -11,6 +11,12 @@ from langgraph.graph import StateGraph, END
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+# Import módulo-level: cost_callback não importa nada de agent (sem ciclo),
+# e sys.modules cacheia o import — não há ganho em adiar pro corpo de
+# run_agent. cost_callback só cria um handler stateless + um ContextVar no
+# import, sem side effects.
+from cost_callback import cost_handler
+
 model = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
 DB_PATH = os.environ.get("SQL_AGENT_DB_PATH", "store.db")
@@ -140,11 +146,6 @@ def run_agent(question: str, chat_history: list) -> str:
     chat_history: list of {"role": "user"/"assistant", "content": str} dicts
     representing previous turns. Returns the agent's answer as a plain string.
     """
-    # Lazy import pra não criar ciclo se cost_callback um dia importar
-    # algo daqui. Tamanho do módulo é pequeno; cost de import 1x por
-    # call é negligível.
-    from cost_callback import cost_handler
-
     messages = []
     for msg in chat_history:
         if msg["role"] == "user":
