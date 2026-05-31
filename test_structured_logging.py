@@ -33,7 +33,14 @@ os.environ.setdefault("API_TOKEN", "test-token")
 from logging_config import JsonFormatter, hash_text, request_id_var  # noqa: E402
 from main import app, limiter, token_limiter  # noqa: E402
 
-_AUTH_OK = {"Authorization": "Bearer test-token"}
+# Ler o token APÓS o setdefault (e após o import de main, que freezea
+# EXPECTED_TOKEN = os.environ["API_TOKEN"]). Hardcodar "test-token" aqui
+# falha quando outro módulo (ex: db.py) faz load_dotenv() antes desse
+# arquivo carregar, injetando um API_TOKEN diferente do .env — setdefault
+# vira no-op e o header não bate com EXPECTED_TOKEN, devolvendo 401.
+# Pattern espelhado de test_rate_limit.py linha 10-11 que já é imune.
+_TOKEN = os.environ["API_TOKEN"]
+_AUTH_OK = {"Authorization": f"Bearer {_TOKEN}"}
 _BODY = {"question": "qual é a venda do mês?", "history": []}
 
 
