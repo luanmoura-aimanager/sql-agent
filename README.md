@@ -344,6 +344,43 @@ curl -X POST localhost:8000/query \
 
 Interactive docs are available at `http://localhost:8000/docs` once the server is running.
 
+## Deploy on Railway (FastAPI + Postgres)
+
+The FastAPI app + Postgres are designed to deploy together on Railway. Config-as-code in `railway.toml`; CI gate via GitHub Actions before auto-deploy.
+
+```bash
+# 1. (One-time) install Railway CLI: brew install railway
+railway login
+railway init           # links repo to a new Railway project
+railway add --plugin postgresql   # provisions managed Postgres
+```
+
+Then in the Railway dashboard, set the app service env vars:
+
+```
+ANTHROPIC_API_KEY = sk-ant-...
+API_TOKEN         = <fresh prod token>     # gerar com: python -c "import secrets; print(secrets.token_urlsafe(32))"
+TRUSTED_PROXIES   = <Railway edge IP>      # depois de identificar via inspect — XFF trust precisa pra IP rate limit funcionar atrás do proxy deles
+```
+
+`DATABASE_URL` is auto-injected by Railway when the Postgres service is linked — don't set it manually.
+
+```bash
+# 2. First deploy
+git push origin main   # triggers Railway auto-deploy via GitHub integration
+
+# Railway applies pre-deploy:
+#   alembic upgrade head     (declared in railway.toml [deploy].preDeployCommand)
+# Then starts the container:
+#   uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+```
+
+CI (`.github/workflows/ci.yml`) runs `pytest` on every PR and push to `main`. Railway only deploys after CI is green — `main` vermelho não chega em produção.
+
+Healthcheck: Railway pings `/health` (exempt do rate limit) e só promove a réplica quando 200.
+
+Workers: 1 por container — Railway escala horizontalmente (mais réplicas). Mantém pool de DB pequeno (5 conexões × N réplicas, fácil prever).
+
 ## Deploy on Streamlit Cloud
 
 1. Fork or push this repo to GitHub.
