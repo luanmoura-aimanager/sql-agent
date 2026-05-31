@@ -75,7 +75,12 @@ def pg_container(docker_or_skip):
     """
     from testcontainers.postgres import PostgresContainer
 
-    with PostgresContainer("postgres:16-alpine") as pg:
+    # driver="asyncpg" explícito: get_connection_url() devolve direto a URL
+    # com o driver async do app (postgresql+asyncpg://). Sem isso, dependia
+    # do default do testcontainers (hoje psycopg2) + um .replace() frágil que
+    # virava no-op se uma versão futura mudasse o default → engine async
+    # recebendo driver sync. Pinar aqui é a fonte única do scheme.
+    with PostgresContainer("postgres:16-alpine", driver="asyncpg") as pg:
         yield pg
 
 
@@ -86,11 +91,9 @@ def _migrated_database_url(pg_container):
     Setamos DATABASE_URL no env porque alembic/env.py lê de lá (mesmo
     pattern do app — single source of truth pra conexão).
     """
-    # asyncpg URL pra runtime do app; Alembic vai trocar pra psycopg
-    # internamente (ver alembic/env.py).
-    url = pg_container.get_connection_url().replace(
-        "postgresql+psycopg2://", "postgresql+asyncpg://"
-    )
+    # URL já vem com asyncpg (driver pinado no pg_container); Alembic troca
+    # pra psycopg internamente (ver alembic/env.py).
+    url = pg_container.get_connection_url()
     os.environ["DATABASE_URL"] = url
 
     # Roda Alembic in-process via API (em vez de subprocess) pra honrar
