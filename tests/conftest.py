@@ -31,6 +31,15 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+# Ryuk (reaper de cleanup do testcontainers) faz bind-mount do socket do
+# Docker num container privilegiado. Em runtimes que montam o socket via
+# virtiofs (Colima, alguns rootless), esse mount falha com "operation not
+# supported" e NENHUM container de teste sobe. Desabilitar o Ryuk evita
+# isso; o cleanup passa a depender do context manager `with
+# PostgresContainer(...)` (que já temos no pg_container) — suficiente pra
+# runs normais e pra CI efêmera. setdefault preserva override explícito.
+os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
+
 # testcontainers tem fila de dependências que pode falhar import sem
 # Docker rodando. Lazy import dentro da fixture, e detectamos a ausência
 # pra dar mensagem útil.

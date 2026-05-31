@@ -140,6 +140,11 @@ def run_agent(question: str, chat_history: list) -> str:
     chat_history: list of {"role": "user"/"assistant", "content": str} dicts
     representing previous turns. Returns the agent's answer as a plain string.
     """
+    # Lazy import pra não criar ciclo se cost_callback um dia importar
+    # algo daqui. Tamanho do módulo é pequeno; cost de import 1x por
+    # call é negligível.
+    from cost_callback import cost_handler
+
     messages = []
     for msg in chat_history:
         if msg["role"] == "user":
@@ -148,5 +153,13 @@ def run_agent(question: str, chat_history: list) -> str:
             messages.append(AIMessage(content=msg["content"]))
     messages.append(HumanMessage(content=question))
 
-    result = graph.invoke({"messages": messages})
+    # Passar callbacks via config aqui propaga pra TODAS as LLM calls
+    # downstream (router, sql_react_agent, tool loops do react). langgraph
+    # injeta esse config na execução de cada node automaticamente — não
+    # precisamos instrumentar cada .invoke() individual. Resultado: uma
+    # única linha cobre cost attribution pra todo o request.
+    result = graph.invoke(
+        {"messages": messages},
+        config={"callbacks": [cost_handler]},
+    )
     return result["messages"][-1].content
