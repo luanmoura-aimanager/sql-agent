@@ -41,7 +41,12 @@ config = context.config
 
 # Logging do alembic.ini (formato dos prints durante upgrade/downgrade)
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: o default (True) DESABILITA todo logger
+    # não listado em alembic.ini ([loggers] = root,sqlalchemy,alembic) — o que
+    # inclui o `sql_agent.api` do app. Como env.py roda in-process nos testes
+    # (conftest chama alembic command.upgrade), o default mataria o logger do
+    # app e os testes de logging estruturado parariam de capturar registros.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 # target_metadata = nosso schema. Sem isso, --autogenerate não consegue
