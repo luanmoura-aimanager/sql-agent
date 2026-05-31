@@ -34,5 +34,8 @@ scripts/
 *.md
 !alembic/README
 
+# SQLite demo db — app de prod usa Postgres, não precisa no container
+*.db
+
 # CI configs não precisam dentro do container
 .github/
