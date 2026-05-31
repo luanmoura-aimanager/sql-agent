@@ -11,8 +11,10 @@ Por que esse módulo existe (sessão 29/05/2026 — Sessão D-1):
   Postgres é o destino certo. Esse módulo define:
     1. O schema da tabela `cost_events` (fact table, append-only).
     2. O engine async com pool configurado.
-    3. Helper temporário pra criar a tabela (será removido em D-2
-       quando Alembic entrar).
+
+  Criação/migração do schema é responsabilidade exclusiva do Alembic
+  (`alembic/` na raiz). Não tem helper paralelo aqui — manter dois
+  caminhos pra criar tabela é fonte garantida de drift.
 
 Decisões travadas (ver project_sql_agent_2026_05_29 na memória):
   - Driver: asyncpg via SQLAlchemy 2.0 async Core (não ORM).
@@ -222,24 +224,17 @@ def __getattr__(name: str):
 
 
 # ----------------------------------------------------------------------
-# init_db — temporário pra D-1
+# Schema lifecycle — Alembic only
 # ----------------------------------------------------------------------
 #
-# Cria a tabela direto a partir do metadata. Útil pro smoke test inicial
-# antes do Alembic entrar (D-2). Quando Alembic estiver configurado,
-# essa função vai sumir — schema vira responsabilidade exclusiva das
-# migrations.
+# Não tem `init_db`/`drop_db` aqui (existiam em D-1 como ponte didática
+# antes do Alembic entrar — ver histórico do git).
 #
-# Por que não deixar de uma vez? Sequência didática: ver SQLAlchemy
-# criando tabela sozinha esclarece o que ele faz com o Table object,
-# antes de adicionar a camada de Alembic em cima.
-async def init_db() -> None:
-    """Cria todas as tabelas do metadata. NÃO usar em prod — só dev/smoke."""
-    async with get_engine().begin() as conn:
-        await conn.run_sync(metadata.create_all)
-
-
-async def drop_db() -> None:
-    """Drop todas as tabelas. Apenas pra cleanup de smoke/testes."""
-    async with get_engine().begin() as conn:
-        await conn.run_sync(metadata.drop_all)
+# Pra aplicar schema:    `alembic upgrade head`
+# Pra reverter última:    `alembic downgrade -1`
+# Pra gerar nova:         `alembic revision --autogenerate -m "msg"`
+# Pra ver pendentes:      `alembic history` + `alembic current`
+#
+# Em testes, conftest.py aplica migrations no setup da fixture do
+# Postgres efêmero (testcontainers) — assim cada execução de pytest
+# valida não só o schema mas também o pipeline completo de migrations.

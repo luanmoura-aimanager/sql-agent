@@ -250,7 +250,35 @@ pip install -r requirements.txt
 python scripts/smoke_cost_events.py
 ```
 
-Schema lives in `db.py` as a SQLAlchemy 2.0 `Table` object. In this session (D-1) the table is created via `metadata.create_all()` directly. The next session (D-2) introduces Alembic so schema changes become versioned migrations.
+Schema lives in `db.py` as a SQLAlchemy 2.0 `Table` object. Schema changes are versioned via **Alembic** migrations in `alembic/versions/`:
+
+```bash
+# Apply all pending migrations (default in fresh dev setup)
+alembic upgrade head
+
+# Generate a new migration after editing the schema in db.py
+alembic revision --autogenerate -m "add some_column"
+
+# Inspect history / current state
+alembic history
+alembic current
+
+# Roll back the most recent migration
+alembic downgrade -1
+```
+
+`alembic/env.py` reads `DATABASE_URL` from the environment (same source as the app — single source of truth). For migrations, it transparently swaps the `asyncpg` driver for `psycopg` (sync), since Alembic doesn't need async; the app runtime keeps using `asyncpg`.
+
+### Tests against real Postgres (testcontainers)
+
+```bash
+# Requires Docker daemon (Colima or Docker Desktop) running
+pytest tests/
+```
+
+The test suite spins up an ephemeral `postgres:16-alpine` container per session (via `testcontainers`), runs `alembic upgrade head` automatically, and tears down at the end. Tests run against the same schema/Postgres version that will run in production — no SQLite-substitute mocking. Each test starts with a truncated table for isolation.
+
+If Docker isn't available, the tests skip cleanly with a clear message (no cryptic error).
 
 To stop Postgres: `docker compose down` (volume persists) or `docker compose down -v` (wipes data).
 

@@ -1,24 +1,27 @@
 """
-Smoke test pra db.py — Sessão D-1.
+Smoke test contra Postgres real — útil pra inspeção manual em dev.
 
 Pré-requisito:
     docker compose up -d
     cp .env.example .env
     pip install -r requirements.txt
+    alembic upgrade head    # aplica schema (Sessão D-2 em diante)
 
 Rodar:
     python scripts/smoke_cost_events.py
 
 O que prova:
     - DATABASE_URL conecta no Postgres do docker-compose.
-    - metadata.create_all cria a tabela cost_events com schema correto.
     - INSERT de um evento de exemplo passa pelos CHECKs.
     - SELECT devolve a linha de volta com todos os campos.
     - CHECK constraint barra cost_usd negativo (defesa em profundidade).
-    - drop_db limpa pra próxima execução ficar idempotente.
 
-Em D-2 isso vira fixture pytest com testcontainers; por ora, é um
-arquivo standalone pra ver a coisa funcionando de ponta a ponta.
+Diferença vs Sessão D-1: o smoke NÃO cria mais a tabela (eram init_db/
+drop_db, removidos quando Alembic entrou). Schema é responsabilidade do
+`alembic upgrade head`. Smoke só valida que o app consegue ler/escrever.
+
+Pra suite de testes automatizada (CI, pré-PR), ver tests/test_db_schema.py
+que sobe Postgres efêmero via testcontainers.
 """
 import asyncio
 import os
@@ -39,14 +42,10 @@ import db  # noqa: E402
 async def main() -> None:
     print(f"DATABASE_URL = {os.environ['DATABASE_URL']}")
     print()
+    print("(Pré-requisito: alembic upgrade head)")
+    print()
 
-    print("1. Drop tabela se existe (limpeza idempotente)…")
-    await db.drop_db()
-
-    print("2. Criando schema via metadata.create_all…")
-    await db.init_db()
-
-    print("3. Inserindo evento de exemplo…")
+    print("1. Inserindo evento de exemplo…")
     rid = uuid.uuid4()
     async with db.engine.begin() as conn:
         result = await conn.execute(
@@ -65,7 +64,7 @@ async def main() -> None:
         inserted_id = result.scalar_one()
     print(f"   → inserted id={inserted_id}, request_id={rid}")
 
-    print("4. Lendo a linha de volta via SELECT…")
+    print("2. Lendo a linha de volta via SELECT…")
     async with db.engine.connect() as conn:
         row = (
             await conn.execute(
@@ -75,7 +74,7 @@ async def main() -> None:
     print(f"   → {dict(row._mapping)}")
 
     print()
-    print("5. Defesa: CHECK constraint barra cost_usd negativo")
+    print("3. Defesa: CHECK constraint barra cost_usd negativo")
     try:
         async with db.engine.begin() as conn:
             await conn.execute(
@@ -96,11 +95,10 @@ async def main() -> None:
         print(f"   ✓ DB barrou negativo: {type(e.orig).__name__}")
 
     print()
-    print("6. Limpando (drop_db) pra próxima execução ser idempotente…")
-    await db.drop_db()
-
-    print()
-    print("✓ Smoke OK — schema, engine, INSERT, SELECT e CHECK funcionam.")
+    print("✓ Smoke OK — engine, INSERT, SELECT e CHECK funcionam.")
+    print("  (Linhas inseridas ficam no DB — use `alembic downgrade base &&")
+    print("   alembic upgrade head` pra zerar, ou rode o teste contra um DB")
+    print("   efêmero via testcontainers.)")
     await db.engine.dispose()
 
 
