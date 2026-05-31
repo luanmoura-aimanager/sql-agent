@@ -197,13 +197,27 @@ Index("ix_cost_events_request_id", cost_events.c.request_id)
 _engine: AsyncEngine | None = None
 
 
+def _async_url() -> str:
+    """Lê DATABASE_URL e garante o driver asyncpg.
+
+    Railway (e a maioria dos Postgres managed) injeta DATABASE_URL na forma
+    canônica `postgresql://...`, sem sufixo de driver. create_async_engine
+    nesse formato resolve o DBAPI sync default e levanta
+    "The asyncio extension requires an async driver". Normalizamos o prefixo
+    aqui pra aceitar tanto `postgresql://` quanto `postgresql+asyncpg://`."""
+    raw = os.environ["DATABASE_URL"]
+    if raw.startswith("postgresql+"):
+        return raw
+    return raw.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
 def get_engine() -> AsyncEngine:
     """Engine singleton, criado sob demanda. Lê DATABASE_URL na primeira
     chamada (fail-fast com KeyError se ausente). Reusado nas seguintes."""
     global _engine
     if _engine is None:
         _engine = create_async_engine(
-            os.environ["DATABASE_URL"],
+            _async_url(),
             pool_size=5,           # conexões permanentes idle prontas
             max_overflow=10,       # picos toleráveis antes de saturar Postgres
             pool_timeout=30,       # segundos de espera antes de raise

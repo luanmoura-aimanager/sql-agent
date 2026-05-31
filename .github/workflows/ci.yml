@@ -1,0 +1,60 @@
+# CI gate — roda pytest em PRs e push pra main.
+#
+# Railway auto-deploya em push pra main. CI verde é o gate antes do
+# deploy automático: PR vermelho não mergeia, main vermelho não chega
+# em produção porque o pipeline de testes corre antes de aprovação.
+#
+# Por que GitHub Actions e não outro CI?
+#   - Repo já está no GitHub. Zero config extra de auth/integração.
+#   - Free tier generoso pra repo público/projeto pequeno.
+#   - Action de Docker-in-Docker funciona out-of-box, então testcontainers
+#     roda sem ajuste (Ryuk disabled via env do conftest cuida do resto).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # Cache de wheels pra acelerar runs subsequentes.
+          # Invalidado quando requirements.txt muda.
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          # API_TOKEN dummy pra testes que importam main.py (que freezea
+          # EXPECTED_TOKEN no import). Não é o token real de prod —
+          # esse vive nos secrets do Railway, não no CI.
+          API_TOKEN: ci-test-token
+          # Ryuk já é desabilitado no conftest.py via setdefault, mas
+          # reforçar aqui torna explícito que runners GitHub Actions
+          # também não suportam o privileged mount do Ryuk.
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: pytest -v
+
+      # Opcional: build da imagem Docker pra validar que o Dockerfile
+      # funciona (não publica). Pega problemas de COPY/CMD em CI antes
+      # do deploy real. Comentado por default — descomenta quando
+      # quiser proteção extra.
+      # - name: Validate Dockerfile build
+      #   run: docker build -t sql-agent:ci .

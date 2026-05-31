@@ -1,0 +1,39 @@
+# Railway deployment config (Sessão Deployment do Cap 3).
+#
+# Docs: https://docs.railway.com/reference/config-as-code
+#
+# Por que arquivo versionado em vez de só dashboard?
+#   - Config-as-code: PR review pega mudança de deploy junto com mudança
+#     de código. Mudar pre-deploy command sem PR pode quebrar prod
+#     silenciosamente.
+#   - Reprodutível: clonar repo + railway up reproduz o mesmo deploy.
+
+[build]
+# Usa nosso Dockerfile (em vez do nixpacks auto-detect do Railway).
+# Multi-stage com python:3.11-slim, ver Dockerfile pra justificativa.
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Pre-deploy: aplica migrations ANTES do app subir. Evita race entre
+# múltiplas réplicas tentando migrar ao mesmo tempo no entrypoint.
+# Roda 1x por deploy; Railway só promove a nova versão se o predeploy
+# zerar sem erro — migration falhada = deploy rejeitado, prod fica na
+# versão anterior. Padrão "fail closed".
+preDeployCommand = "alembic upgrade head"
+
+# Comando que sobe o app. Defaultado no Dockerfile CMD; aqui sobrescreve
+# se precisar. Mantemos consistente com o CMD pra um único source of truth.
+startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"
+
+# Healthcheck — Railway só roteia tráfego pra réplica que responder 200
+# nesse path. /health é o endpoint exempt de rate limit que temos desde
+# o opener de FastAPI.
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+
+# Restart policy: ON_FAILURE só reinicia se o processo morrer com erro
+# (exit code != 0). ALWAYS reinicia mesmo em exit 0 — desnecessário pra
+# nosso caso (uvicorn não termina sozinho em prod).
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

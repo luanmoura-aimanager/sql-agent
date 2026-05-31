@@ -1,0 +1,41 @@
+# Filtra o que NÃO entra na imagem Docker. Reduz tamanho + evita vazar
+# segredos (.env) e arquivos de dev (.git, py311env).
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Python local envs (venv local não serve no Linux do container)
+py311env/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Dev-only / não precisa em runtime de prod
+tests/
+test_*.py
+docker-compose.yml
+scripts/
+.env
+.env.example
+.commit-msg-*.txt
+.claude/
+*.md
+!alembic/README
+
+# SQLite demo db — app de prod usa Postgres, não precisa no container
+*.db
+
+# CI configs não precisam dentro do container
+.github/

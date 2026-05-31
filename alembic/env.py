@@ -63,7 +63,16 @@ raw_url = os.environ["DATABASE_URL"]
 # asyncpg é async-only; Alembic online mode espera driver sync.
 # psycopg (v3) é o sync de referência hoje. Troca só do prefixo do dialect
 # preserva user/pass/host/db do mesmo Postgres.
-sync_url = raw_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
+#
+# Aceita as duas formas de DATABASE_URL: a do app (`postgresql+asyncpg://`)
+# e a canônica que Railway/Postgres managed injetam (`postgresql://`, sem
+# driver). Ambas viram o driver sync psycopg pras migrations.
+if raw_url.startswith("postgresql+asyncpg://"):
+    sync_url = raw_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+elif raw_url.startswith("postgresql+"):
+    sync_url = raw_url  # já tem driver explícito; respeita
+else:
+    sync_url = raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
 config.set_main_option("sqlalchemy.url", sync_url)
 
 
