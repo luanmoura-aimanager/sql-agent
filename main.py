@@ -14,6 +14,9 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from logging_config import hash_text, request_id_var, setup_logging
+from cost_callback import init_accumulator, read_accumulator, reset_accumulator
+import db
+import pricing
 
 # Setup do logging acontece no import — antes de qualquer logger.info()
 # em outros módulos. Idempotente (chamadas repetidas em teste não
@@ -233,12 +236,74 @@ async def query(request: Request, response: Response, body: QueryRequest, _: Non
     # time.time() pra evitar pulos por NTP sync.
     t0 = time.perf_counter()
     q_hash = hash_text(body.question)
+    # token_hash = fingerprint do Bearer pra agregar cost por cliente sem
+    # guardar o token em texto. Mesma função do logging_config.
+    bearer = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    token_hash = hash_text(bearer)
+    # Inicializa o cost accumulator no scope do request. O ContextVar
+    # leva os totais por copy-on-write (não vaza entre tasks asyncio).
+    # init/reset bracketa só o trecho do agent — middleware não precisa
+    # saber disso, isolando a camada de billing do resto.
+    acc_token = init_accumulator(token_hash=token_hash)
     try:
         history = [{"role": m.role, "content": m.content} for m in body.history]
         answer = run_agent(body.question, history)
         latency_ms = int((time.perf_counter() - t0) * 1000)
+        acc = read_accumulator() or {}
+        input_tokens = int(acc.get("input_tokens", 0))
+        output_tokens = int(acc.get("output_tokens", 0))
+        model_name = acc.get("model_name")
+        call_count = int(acc.get("call_count", 0))
+
+        # Cost calc + INSERT só fazem sentido se o agente realmente
+        # chamou algum LLM (call_count > 0) e o callback conseguiu
+        # identificar o modelo. Sem isso, gravar linha com model_name
+        # NULL ou cost 0 seria poluir a tabela.
+        cost_usd = None
+        pricing_version = pricing.get_version()
+        if call_count > 0 and model_name:
+            cost_usd = pricing.calculate_cost_usd(
+                model_name, input_tokens, output_tokens
+            )
+            # Sync INSERT — await dentro do handler. Trade-off real
+            # (response latency inclui DB write; DB lento → response
+            # lenta) é tema de Path C (async + degradação) deferido
+            # pra Cap 4+. Hoje sync é o pattern didático correto e
+            # produção pequena sobrevive bem com isso.
+            async with db.engine.begin() as conn:
+                await conn.execute(
+                    db.cost_events.insert(),
+                    {
+                        "request_id": uuid.UUID(request_id_var.get()),
+                        "token_hash": token_hash,
+                        "model_name": model_name,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "cost_usd": cost_usd,
+                        "pricing_version": pricing_version,
+                    },
+                )
+        elif call_count > 0:
+            # Houve chamada de LLM (tokens foram gastos) mas o callback não
+            # conseguiu extrair model_name por nenhum dos fallbacks — sem
+            # modelo não dá pra precificar, então não há INSERT. Loga WARNING
+            # pra o evento não sumir em silêncio: sem isso a tabela de cost
+            # subnotificaria gasto real e ninguém saberia. Sinal acionável
+            # (pricing/callback precisa de atenção) em vez de perda muda.
+            log.warning(
+                "cost_event_skipped_no_model",
+                extra={
+                    "q_hash": q_hash,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "llm_call_count": call_count,
+                },
+            )
+
         # INFO: categoria A (latência, status) + categoria B com hash.
-        # answer fica sem hash (só len) — vetor de PII alto, hash raramente útil.
+        # Cost fields entram aqui pra log aggregator agrupar por token_hash
+        # sem precisar de query no DB ("quanto X gastou na última hora?"
+        # via Datadog/Loki SUM em vez de query no Postgres).
         log.info(
             "query_handled",
             extra={
@@ -247,6 +312,12 @@ async def query(request: Request, response: Response, body: QueryRequest, _: Non
                 "history_len": len(body.history),
                 "latency_ms": latency_ms,
                 "status": 200,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": str(cost_usd) if cost_usd is not None else None,
+                "model_name": model_name,
+                "pricing_version": pricing_version,
+                "llm_call_count": call_count,
             },
         )
         # DEBUG: texto completo de question e answer. Só sai se o root
@@ -286,3 +357,8 @@ async def query(request: Request, response: Response, body: QueryRequest, _: Non
         # Assim o operador tem visibilidade e o cliente não vê nada útil
         # pra reconnaissance.
         raise HTTPException(status_code=500, detail="Internal error")
+    finally:
+        # Reset do cost accumulator — mesma defesa do request_id_var
+        # (Sessão D-1): sem reset, valor vaza pra fora do scope dentro
+        # da mesma task asyncio. Não vaza entre tasks (copy-on-write).
+        reset_accumulator(acc_token)

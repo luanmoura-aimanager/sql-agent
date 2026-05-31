@@ -11,6 +11,12 @@ from langgraph.graph import StateGraph, END
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+# Import módulo-level: cost_callback não importa nada de agent (sem ciclo),
+# e sys.modules cacheia o import — não há ganho em adiar pro corpo de
+# run_agent. cost_callback só cria um handler stateless + um ContextVar no
+# import, sem side effects.
+from cost_callback import cost_handler
+
 model = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
 DB_PATH = os.environ.get("SQL_AGENT_DB_PATH", "store.db")
@@ -148,5 +154,13 @@ def run_agent(question: str, chat_history: list) -> str:
             messages.append(AIMessage(content=msg["content"]))
     messages.append(HumanMessage(content=question))
 
-    result = graph.invoke({"messages": messages})
+    # Passar callbacks via config aqui propaga pra TODAS as LLM calls
+    # downstream (router, sql_react_agent, tool loops do react). langgraph
+    # injeta esse config na execução de cada node automaticamente — não
+    # precisamos instrumentar cada .invoke() individual. Resultado: uma
+    # única linha cobre cost attribution pra todo o request.
+    result = graph.invoke(
+        {"messages": messages},
+        config={"callbacks": [cost_handler]},
+    )
     return result["messages"][-1].content
