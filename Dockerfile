@@ -72,4 +72,8 @@ USER app
 # verticalmente (mais workers por réplica). 1 worker mantém pool de DB
 # pequeno (5 conexões por réplica × N réplicas — fácil prever cota
 # Postgres) e elimina shared state quirks entre workers no mesmo processo.
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
+#
+# CMD em shell form → Docker roda como `/bin/sh -c "..."`, então o `exec`
+# substitui o shell pelo uvicorn (vira PID 1). Sem ele o shell fica de pai
+# e engole o SIGTERM no shutdown, derrubando o graceful drain do uvicorn.
+CMD exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1

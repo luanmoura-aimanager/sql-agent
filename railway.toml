@@ -31,7 +31,16 @@ preDeployCommand = "alembic upgrade head"
 #   como porta inválida e crasha no boot — healthcheck falha. `sh -c` força
 #   shell interpretation que expande a variável antes do uvicorn ver.
 #   Mesmo padrão vale pra Dockerfile CMD em exec form.
-startCommand = "sh -c 'uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1'"
+#
+# Por que `exec`?
+#   Sem `exec`, o shell continua sendo o PAI do uvicorn. No redeploy/scale-down
+#   o Railway manda SIGTERM pro processo de start; um shell não-init NÃO repassa
+#   o sinal pros filhos, então o uvicorn nunca inicia o graceful shutdown,
+#   estoura a janela de grace e leva SIGKILL no meio de requests in-flight.
+#   `exec` substitui o shell pelo uvicorn (vira o processo direto) e garante
+#   que o SIGTERM chega nele — independente do shell e de o comando virar
+#   composto no futuro. Não depende da otimização implícita single-command.
+startCommand = "sh -c 'exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1'"
 
 # Healthcheck — Railway só roteia tráfego pra réplica que responder 200
 # nesse path. /health é o endpoint exempt de rate limit que temos desde
