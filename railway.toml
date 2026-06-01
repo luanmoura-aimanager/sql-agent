@@ -24,7 +24,14 @@ preDeployCommand = "alembic upgrade head"
 
 # Comando que sobe o app. Defaultado no Dockerfile CMD; aqui sobrescreve
 # se precisar. Mantemos consistente com o CMD pra um único source of truth.
-startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"
+#
+# Por que `sh -c "..."` envolvendo o uvicorn?
+#   Railway executa startCommand em exec form (sem shell). Sem o `sh -c`,
+#   `${PORT:-8000}` é passado LITERAL pro uvicorn, que rejeita "${PORT:-8000}"
+#   como porta inválida e crasha no boot — healthcheck falha. `sh -c` força
+#   shell interpretation que expande a variável antes do uvicorn ver.
+#   Mesmo padrão vale pra Dockerfile CMD em exec form.
+startCommand = "sh -c 'uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1'"
 
 # Healthcheck — Railway só roteia tráfego pra réplica que responder 200
 # nesse path. /health é o endpoint exempt de rate limit que temos desde
