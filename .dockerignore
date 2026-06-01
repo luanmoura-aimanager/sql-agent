@@ -34,8 +34,12 @@ scripts/
 *.md
 !alembic/README
 
-# SQLite demo db — app de prod usa Postgres, não precisa no container
+# SQLite — filtra dbs locais (dev artifacts) mas mantém store.db, que é a
+# fonte read-only que o agente consulta via MCP. cost_events vive em Postgres;
+# store.db tem os dados de demo (customers/orders) e PRECISA ir no container
+# até migrarmos esses dados pra Postgres também.
 *.db
+!store.db
 
 # CI configs não precisam dentro do container
 .github/
