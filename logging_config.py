@@ -61,7 +61,7 @@ class JsonFormatter(logging.Formatter):
     Por que escrever na mão e não usar python-json-logger?
       Didático: ver o LogRecord por dentro força entender o modelo do
       stdlib (handlers, formatters, propagação). Em ~30 linhas você tem
-      tudo que importa: timestamp ISO, level, event, request_id, extras.
+      tudo que importa: timestamp ISO, level, message, request_id, extras.
 
     Por que json.dumps com ensure_ascii=False?
       Pra acento aparecer literal no log (português legível).
@@ -86,7 +86,7 @@ class JsonFormatter(logging.Formatter):
         payload: dict[str, Any] = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level": record.levelname,
-            "event": record.getMessage(),
+            "message": record.getMessage(),
             "request_id": request_id_var.get(),
         }
         # Extras: tudo que não é built-in do LogRecord (inclui o que
