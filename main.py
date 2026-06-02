@@ -24,6 +24,19 @@ import pricing
 setup_logging()
 log = logging.getLogger("sql_agent.api")
 
+# DEBUG (temporário — investigação Cap 3 prod 2026-06-02):
+# emite log de startup + dump dos handlers do root pra prod confirmar
+# se setup_logging() está vivo ou se uvicorn/Railway sobrescreve.
+# Remover após root cause encontrada.
+import sys as _sys
+_root = logging.getLogger()
+_sys.stderr.write(
+    f"[STARTUP_DEBUG] root.handlers={[type(h).__name__ for h in _root.handlers]} "
+    f"root.level={_root.level} formatters={[type(h.formatter).__name__ for h in _root.handlers if h.formatter]}\n"
+)
+_sys.stderr.flush()
+log.info("startup_smoke", extra={"phase": "post_setup_logging"})
+
 app = FastAPI()
 
 
