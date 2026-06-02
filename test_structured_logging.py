@@ -74,7 +74,7 @@ def test_formatter_emits_valid_json_with_required_fields():
     output = formatter.format(record)
     parsed = json.loads(output)
     assert parsed["level"] == "INFO"
-    assert parsed["event"] == "event_name"
+    assert parsed["message"] == "event_name"
     assert parsed["request_id"] == "-"  # fora de scope de request
     assert "ts" in parsed
 
@@ -113,11 +113,11 @@ def test_log_injection_newline_is_escaped():
     output = formatter.format(record)
     # Zero newlines literais no output → uma única linha de log.
     assert output.count("\n") == 0
-    # O texto malicioso continua acessível DENTRO do campo event,
+    # O texto malicioso continua acessível DENTRO do campo message,
     # com o \n preservado lá dentro (escapado na serialização).
     parsed = json.loads(output)
-    assert "\n" in parsed["event"]
-    assert "system breach" in parsed["event"]
+    assert "\n" in parsed["message"]
+    assert "system breach" in parsed["message"]
 
 
 def test_log_injection_via_extra_field_is_escaped():
@@ -301,7 +301,7 @@ def test_500_log_keeps_error_type_for_triage(mock_agent, caplog):
 
     # Renderiza pelo formatter de produção e valida o JSON que sai de fato.
     rendered = json.loads(JsonFormatter().format(rec))
-    assert rendered["event"] == "query_failed"
+    assert rendered["message"] == "query_failed"
     assert rendered["error_type"] == "RuntimeError"
     assert rendered["status"] == 500
     # q_hash bate com o hash da pergunta (correlação por hash não quebra no erro).

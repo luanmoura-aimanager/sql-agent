@@ -24,42 +24,6 @@ import pricing
 setup_logging()
 log = logging.getLogger("sql_agent.api")
 
-# DEBUG (temporário — investigação Cap 3 prod 2026-06-02):
-# Bateria de sondas pra isolar root cause do JSON logging não aparecer
-# em prod (apesar de setup_logging ter rodado certo).
-# Remover após root cause encontrada.
-import sys as _sys
-_root = logging.getLogger()
-_handler = _root.handlers[0] if _root.handlers else None
-_handler_stream_id = id(_handler.stream) if _handler else None
-_stdout_id = id(_sys.stdout)
-_stderr_id = id(_sys.stderr)
-
-# (1) Sonda em stderr direto — confirmamos antes que aparece
-_sys.stderr.write(
-    f"[STARTUP_DEBUG] root.handlers={[type(h).__name__ for h in _root.handlers]} "
-    f"root.level={_root.level} "
-    f"handler_stream_id={_handler_stream_id} sys.stdout_id={_stdout_id} sys.stderr_id={_stderr_id} "
-    f"streams_match_stdout={_handler_stream_id == _stdout_id} "
-    f"sql_agent_logger_disabled={logging.getLogger('sql_agent').disabled} "
-    f"sql_agent_propagate={logging.getLogger('sql_agent').propagate}\n"
-)
-_sys.stderr.flush()
-
-# (2) Sonda em stdout direto — testa se stdout em si funciona via write()
-_sys.stdout.write("[STARTUP_DEBUG_STDOUT_RAW] write direto pra sys.stdout\n")
-_sys.stdout.flush()
-
-# (3) log.info original — deveria produzir JSON em stdout
-log.info("startup_smoke_via_logger", extra={"phase": "post_setup_logging"})
-
-# (4) Handler novo explicito em stderr — bypass do "handler antigo" hipotese
-_extra_handler = logging.StreamHandler(_sys.stderr)
-_extra_handler.setFormatter(_root.handlers[0].formatter if _root.handlers else logging.Formatter())
-_root.addHandler(_extra_handler)
-log.info("startup_smoke_via_new_stderr_handler", extra={"phase": "post_setup_logging"})
-_root.removeHandler(_extra_handler)
-
 app = FastAPI()
 
 
